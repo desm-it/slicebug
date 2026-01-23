@@ -1,4 +1,4 @@
-black==22.1.0
+black==24.3.0
 cx-Freeze==6.13.1
-cryptography==39.0.0
-protobuf==3.19.4
+cryptography==44.0.1
+protobuf==7.34.0rc1
