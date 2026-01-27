@@ -1,4 +1,5 @@
 import os.path
+import platform
 import shutil
 
 from dataclasses import dataclass
@@ -7,6 +8,11 @@ from typing import Optional
 from slicebug.config.keys import Keys
 from slicebug.config.machine_profile import MachineProfiles, MachineProfile
 from slicebug.exceptions import UserError
+
+
+def _exe_suffix():
+    """Return '.exe' on Windows, '' on other platforms."""
+    return ".exe" if platform.system() == "Windows" else ""
 
 
 @dataclass
@@ -62,9 +68,8 @@ class Config:
         return os.path.join(self.config_root, "plugins")
 
     def device_plugin_path(self):
-        path = os.path.join(
-            self.config_root, "plugins", "device-common", "CricutDevice.exe"
-        )
+        exe_name = "CricutDevice" + _exe_suffix()
+        path = os.path.join(self.config_root, "plugins", "device-common", exe_name)
 
         if not os.path.exists(path):
             return None
@@ -72,7 +77,8 @@ class Config:
         return path
 
     def usvg_path(self):
-        path = os.path.join(self.config_root, "plugins", "usvg", "usvg.exe")
+        exe_name = "usvg" + _exe_suffix()
+        path = os.path.join(self.config_root, "plugins", "usvg", exe_name)
 
         if not os.path.exists(path):
             path = shutil.which("usvg")

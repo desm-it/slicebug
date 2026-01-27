@@ -100,8 +100,11 @@ class MaterialSettings:
     def load(cls, path):
         with open(path, encoding="utf-8") as ms_file:
             materials_json = json.load(ms_file)["customMaterials"]["materials"]
-            materials = {
-                material.global_id: material
-                for material in map(Material.from_json, materials_json)
-            }
+            materials = {}
+            for m_json in materials_json:
+                # Skip materials missing required fields
+                if "globalId" not in m_json:
+                    continue
+                material = Material.from_json(m_json)
+                materials[material.global_id] = material
         return cls(materials=materials)

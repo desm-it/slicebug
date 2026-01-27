@@ -4,10 +4,33 @@ slicebug is a command-line tool for preparing and executing cutting jobs on Cric
 slicebug interacts with cutters by reusing undocumented components of Cricut Design Space. It is not developed or authorized by Cricut. Using slicebug might damage your cutter.
 
 # Requirements
-- Windows
+- Windows or macOS
 - Cricut Design Space installed and used at least once
+- On macOS: ensure only one Cricut device is paired (remove any Bluetooth-paired devices from System Settings > Bluetooth if you're connecting via USB)
 
 slicebug is developed in Python 3.10. You don't need Python to run it, just download a compiled version by clicking the "Releases" section on the right.
+
+## Running from source (macOS)
+
+On macOS, you can run slicebug directly from source using Python:
+
+```bash
+# Create a virtual environment (using uv or standard venv)
+uv venv
+source .venv/bin/activate
+
+# Install dependencies
+uv pip install cryptography protobuf
+
+# Bootstrap slicebug (copies required data from Cricut Design Space)
+python -m slicebug bootstrap
+
+# List available materials
+python -m slicebug list-materials
+
+# Execute a cut plan
+python -m slicebug cut examples/star.json
+```
 
 # Usage example
 
@@ -82,9 +105,8 @@ Just follow the instructions and your cut should complete!
 - Testing/support for anything other than the original Cricut Maker
   - Basic cutting will likely work on other machines supported by Cricut Design Space---please try it and report back!
   - Features specific to other machines, like Smart Materials, are not supported yet.
-- Operating systems other than Windows
-  - macOS: should be fairly easy, just some hardcoded paths that need tweaking.
-  - Linux: 
+- Operating systems other than Windows and macOS
+  - Linux:
   	- CricutDevice.exe does not run under Wine, but perhaps it does under one of the forks?
     - `slicebug plan` works under Linux already if you copy the bootstrapped files from a Windows machine and manually install usvg.
 - Print then Cut

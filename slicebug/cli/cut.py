@@ -121,19 +121,31 @@ def cut_inner(config, dev, plan):
     dev.recv(PBInteractionStatus.riStartSuccess)
 
     device_connected_resp = dev.recv()
+
+    # Handle macOS-specific handshake (status 1215)
+    # This appears to be a newer protocol acknowledgment step
+    if device_connected_resp.status == 1215:
+        dev.send(
+            PBCommonBridge(
+                handle=PBInteractionHandle(currentInteraction=999),
+                status=1215,
+            )
+        )
+        device_connected_resp = dev.recv()
+
     match device_connected_resp.status:
         case PBInteractionStatus.riSingleDeviceConnected:
             # great, this is what we're looking for
+            pass
+        case PBInteractionStatus.riMultipleDevicesConnected:
+            # On macOS, the plugin often reports multiple devices even with just USB
+            # connected. We'll proceed and let the serial check catch mismatches.
+            print("Note: Multiple devices detected, proceeding with default selection.")
             pass
         case PBInteractionStatus.riNoDeviceConnected:
             raise UserError(
                 "No Cricut devices connected.",
                 "Connect your cutter to your computer and try again.",
-            )
-        case PBInteractionStatus.riMultipleDevicesConnected:
-            raise UserError(
-                "Multiple Cricut devices connected.",
-                "Disconnect all cutters except for the one you are trying to use and try again.",
             )
         case _:
             raise ProtocolError(
@@ -219,11 +231,14 @@ def cut_inner(config, dev, plan):
     dev.recv(PBInteractionStatus.riWaitOnGo)
     print("Press the Go button.")
 
-    dev.recv(PBInteractionStatus.riGoPressed)
-    dev.recv(PBInteractionStatus.riGoPressed)
-    dev.recv(PBInteractionStatus.riWaitClear)
-
-    dev.recv(PBInteractionStatus.riSendToolArray)
+    # Handle Go button press sequence - may vary between platforms
+    # Keep consuming messages until we get riSendToolArray
+    while True:
+        resp = dev.recv()
+        if resp.status == PBInteractionStatus.riSendToolArray:
+            break
+        # On macOS, we may get: riWaitClear, riWaitOnGo, riGoPressed, etc.
+        # Just keep consuming until we hit riSendToolArray
 
     dev.send(
         PBCommonBridge(
@@ -297,6 +312,8 @@ def cut_inner(config, dev, plan):
                 | PBInteractionStatus.riDetectingTool
                 | PBInteractionStatus.riMATCUTSetProgress
                 | PBInteractionStatus.riWaitForEndMoveProgress
+                | PBInteractionStatus.riGoPressed
+                | PBInteractionStatus.riWaitClear
             ):
                 pass
             case _:

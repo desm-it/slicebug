@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os.path
+import platform
 import re
 import shutil
 import urllib.request
@@ -14,12 +15,30 @@ from slicebug.config.machine_profile import MachineProfile, MachineProfiles
 from slicebug.exceptions import UserError
 
 
-USVG_DOWNLOAD_URL = (
-    "https://github.com/RazrFalcon/resvg/releases/download/v0.27.0/usvg-win64.zip"
-)
-USVG_DOWNLOAD_SHA256 = (
-    "fc30023106bc846ba43713a620b638a04cae761a9fa899b7bd31f4ef9236b96d"
-)
+def _get_usvg_download_info():
+    """Return (url, sha256, archive_member) for the current platform."""
+    system = platform.system()
+    if system == "Darwin":
+        return (
+            "https://github.com/linebender/resvg/releases/download/v0.27.0/usvg-macos-x86_64.zip",
+            "48c0ca0fbe0a7e195c84545a6924a7aec526070a98facc5c54829620d8e49887",
+            "usvg",
+        )
+    else:  # Windows and others default to Windows
+        return (
+            "https://github.com/linebender/resvg/releases/download/v0.27.0/usvg-win64.zip",
+            "fc30023106bc846ba43713a620b638a04cae761a9fa899b7bd31f4ef9236b96d",
+            "usvg.exe",
+        )
+
+
+def _get_default_cds_path():
+    """Return the default Cricut Design Space installation path for the current platform."""
+    system = platform.system()
+    if system == "Darwin":
+        return "/Applications/Cricut Design Space.app/Contents/Resources"
+    else:  # Windows
+        return os.path.expanduser("~/AppData/Local/Programs/Cricut Design Space")
 
 
 def bootstrap_register_args(subparsers):
@@ -30,7 +49,7 @@ def bootstrap_register_args(subparsers):
     parser.add_argument(
         "--design-space-path",
         help="Path to where Cricut Design Space is installed. Defaults to %(default)s, you likely don't need to change this.",
-        default=os.path.expanduser("~/AppData/Local/Programs/Cricut Design Space"),
+        default=_get_default_cds_path(),
     )
     parser.add_argument(
         "--design-space-profile-path",
@@ -47,7 +66,13 @@ def import_keys(cds_root, cds_profile_root, cds_user, config):
     xor = lambda data, key: bytes(v ^ key[i % len(key)] for i, v in enumerate(data))
 
     print("Locating obfuscation key.")
-    with open(os.path.join(cds_root, "resources", "app.asar"), "rb") as f:
+    # On macOS, cds_root is already Contents/Resources
+    # On Windows, app.asar is in cds_root/resources/
+    if platform.system() == "Darwin":
+        asar_path = os.path.join(cds_root, "app.asar")
+    else:
+        asar_path = os.path.join(cds_root, "resources", "app.asar")
+    with open(asar_path, "rb") as f:
         asar = f.read()
         # this matches ([0x01, 0x02, ...]) with exactly 64 elements.
         obfuscation_key_pattern = (
@@ -89,7 +114,12 @@ def import_keys(cds_root, cds_profile_root, cds_user, config):
 
 
 def import_plugins(cds_root, config):
-    plugin_dir = os.path.join(cds_root, "resources", "plugins")
+    # On macOS, cds_root is already Contents/Resources, so plugins is directly inside
+    # On Windows, it's cds_root/resources/plugins
+    if platform.system() == "Darwin":
+        plugin_dir = os.path.join(cds_root, "plugins")
+    else:
+        plugin_dir = os.path.join(cds_root, "resources", "plugins")
     print(f"Importing plugins from {cds_root}.")
 
     for plugin in ["device-common"]:
@@ -178,20 +208,28 @@ def import_machine_profiles(cds_profile_root, cds_users, config):
 
 
 def download_usvg(config):
-    print("Downloading usvg from Github.")
-    response = urllib.request.urlopen(USVG_DOWNLOAD_URL)
-    zip_bytes = response.read()
-    zip_sha256 = hashlib.sha256(zip_bytes).hexdigest()
+    usvg_url, usvg_sha256, usvg_member = _get_usvg_download_info()
 
-    if zip_sha256 != USVG_DOWNLOAD_SHA256:
+    print("Downloading usvg from Github.")
+    response = urllib.request.urlopen(usvg_url)
+    zip_bytes = response.read()
+    zip_sha256_actual = hashlib.sha256(zip_bytes).hexdigest()
+
+    if zip_sha256_actual != usvg_sha256:
         raise UserError(
-            "Could not download usvg. Expected to see a file with hash {USVG_DOWNLOAD_SHA256}, saw {zip_sha256}.",
+            f"Could not download usvg. Expected to see a file with hash {usvg_sha256}, saw {zip_sha256_actual}.",
             "Check your network connection.",
         )
 
     print("Extracting usvg.")
+    usvg_dir = os.path.join(config.plugin_root(), "usvg")
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zip_struct:
-        zip_struct.extract("usvg.exe", os.path.join(config.plugin_root(), "usvg"))
+        zip_struct.extract(usvg_member, usvg_dir)
+
+    # Make executable on Unix systems
+    if platform.system() != "Windows":
+        usvg_path = os.path.join(usvg_dir, usvg_member)
+        os.chmod(usvg_path, 0o755)
 
     print("usvg extracted.")
 
