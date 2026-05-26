@@ -329,8 +329,19 @@ def cut_inner(config, dev, plan, software_buttons=False):
                     send_software_button(
                         dev, PBInteractionStatus.riMATCUTSimulateCricutButtonPressed
                     )
-                dev.recv(PBInteractionStatus.riGoPressed)
-                dev.recv(PBInteractionStatus.riWaitClear)
+                    resp = dev.recv()
+                    if resp.status not in (
+                        PBInteractionStatus.riGoPressed,
+                        PBInteractionStatus.riWaitClear,
+                    ):
+                        raise ProtocolError(
+                            f"unexpected status after software Go: {resp.status}"
+                        )
+                    if resp.status != PBInteractionStatus.riWaitClear:
+                        dev.recv(PBInteractionStatus.riWaitClear)
+                else:
+                    dev.recv(PBInteractionStatus.riGoPressed)
+                    dev.recv(PBInteractionStatus.riWaitClear)
             case PBInteractionStatus.riDevicePaused:
                 dev.recv(PBInteractionStatus.riWaitOnGoOrPause)
                 print("Cutting paused. Press Go to resume or Load/Unload to abort cut.")
