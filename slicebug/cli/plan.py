@@ -259,9 +259,9 @@ def plan(args, config):
 
         print(f" - {path_count} paths with stroke color {stroke}, {mapped}")
 
-    # 13x12 is what CDS seems to be using when cutting on a regular 12x12 mat.
-    # it's unclear whether this affects anything.
-    mat = PlanMat(width=13.0, height=12.0)
+    # Hardcoded for Cricut Joy 4.5 x 12 in mat during local experiments.
+    # TODO: expose this as CLI args / machine-profile defaults.
+    mat = PlanMat(width=4.5, height=12.0)
     material = PlanMaterial(
         width=material_width,
         height=material_height,

@@ -218,7 +218,18 @@ def cut_inner(config, dev, plan):
     match resp.status:
         case PBInteractionStatus.riWaitOnMatLoad:
             print("Insert mat and press the Load/Unload button.")
-            dev.recv(PBInteractionStatus.riMatLoaded)
+            while True:
+                resp = dev.recv()
+                if resp.status == PBInteractionStatus.riMatLoaded:
+                    break
+                # Cricut Joy on macOS can emit status 143 after pressing Load.
+                # It is not named in this protobuf snapshot, but it appears to
+                # be an intermediate/ack status before the normal mat-loaded flow.
+                if resp.status == 143:
+                    continue
+                raise ProtocolError(
+                    f"unexpected status while waiting for mat load: {resp.status}"
+                )
         case PBInteractionStatus.riMatLoaded:
             print("Mat is already loaded.")
         case _:
@@ -226,7 +237,13 @@ def cut_inner(config, dev, plan):
                 f"unexpected status after material selected: {resp.status}"
             )
 
-    dev.recv(PBInteractionStatus.riWaitClear)
+    while True:
+        resp = dev.recv()
+        if resp.status == PBInteractionStatus.riWaitClear:
+            break
+        if resp.status == 143:
+            continue
+        raise ProtocolError(f"unexpected status before wait clear: {resp.status}")
 
     dev.recv(PBInteractionStatus.riWaitOnGo)
     print("Press the Go button.")
