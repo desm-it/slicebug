@@ -32,10 +32,28 @@ def cut_register_args(subparsers):
     parser.add_argument(
         "plan", type=argparse.FileType("r"), help="Path to your plan file."
     )
+    parser.add_argument(
+        "--software-buttons",
+        action="store_true",
+        help=(
+            "Use CricutDevice software button simulation messages instead of "
+            "waiting for physical Load/Unload and Go buttons. This is needed "
+            "for buttonless machines such as Cricut Joy."
+        ),
+    )
 
     parser.set_defaults(cmd_handler=cut)
     parser.set_defaults(cmd_needs_profile=True)
     parser.set_defaults(cmd_needs_keys=True)
+
+
+def send_software_button(dev, status):
+    dev.send(
+        PBCommonBridge(
+            handle=PBInteractionHandle(currentInteraction=999),
+            status=status,
+        )
+    )
 
 
 def plan_tool_info(config, material, grouped_paths):
@@ -98,7 +116,7 @@ def plan_mat_path_data(config, plan, grouped_paths):
     )
 
 
-def cut_inner(config, dev, plan):
+def cut_inner(config, dev, plan, software_buttons=False):
     grouped_paths = group_and_order_paths(plan)
 
     material_settings = MaterialSettings.load(config.profile.material_settings_path())
@@ -217,7 +235,13 @@ def cut_inner(config, dev, plan):
     resp = dev.recv()
     match resp.status:
         case PBInteractionStatus.riWaitOnMatLoad:
-            print("Insert mat and press the Load/Unload button.")
+            if software_buttons:
+                input("Insert mat, then press Enter to send software Load.")
+                send_software_button(
+                    dev, PBInteractionStatus.riMATCUTSimulateLoadButtonPressed
+                )
+            else:
+                print("Insert mat and press the Load/Unload button.")
             while True:
                 resp = dev.recv()
                 if resp.status == PBInteractionStatus.riMatLoaded:
@@ -246,7 +270,11 @@ def cut_inner(config, dev, plan):
         raise ProtocolError(f"unexpected status before wait clear: {resp.status}")
 
     dev.recv(PBInteractionStatus.riWaitOnGo)
-    print("Press the Go button.")
+    if software_buttons:
+        input("Press Enter to send software Go and start the cut.")
+        send_software_button(dev, PBInteractionStatus.riMATCUTSimulateCricutButtonPressed)
+    else:
+        print("Press the Go button.")
 
     # Handle Go button press sequence - may vary between platforms
     # Keep consuming messages until we get riSendToolArray
@@ -290,9 +318,17 @@ def cut_inner(config, dev, plan):
                     tool_names.append(tool_name)
 
                 current, required = tool_names
-                print(f"Replace the {current} with {required} and press Go.")
+                if software_buttons:
+                    print(f"Replace the {current} with {required}.")
+                else:
+                    print(f"Replace the {current} with {required} and press Go.")
 
                 dev.recv(PBInteractionStatus.riWaitOnGo)
+                if software_buttons:
+                    input("Press Enter to send software Go and continue.")
+                    send_software_button(
+                        dev, PBInteractionStatus.riMATCUTSimulateCricutButtonPressed
+                    )
                 dev.recv(PBInteractionStatus.riGoPressed)
                 dev.recv(PBInteractionStatus.riWaitClear)
             case PBInteractionStatus.riDevicePaused:
@@ -339,7 +375,11 @@ def cut_inner(config, dev, plan):
     print("Cutting finished.")
 
     dev.recv(PBInteractionStatus.riWaitOnMatUnload)
-    print("Press the Load/Unload button to unload mat.")
+    if software_buttons:
+        input("Press Enter to send software Unload.")
+        send_software_button(dev, PBInteractionStatus.riMATCUTSimulateLoadButtonPressed)
+    else:
+        print("Press the Load/Unload button to unload mat.")
 
     dev.recv(PBInteractionStatus.riMatUnloaded)
     dev.recv(PBInteractionStatus.riMatUnloaded)
@@ -361,4 +401,4 @@ def cut(args, config):
     with DevicePlugin(
         config.device_plugin_path(), config.keys.cricutdevice_request_key
     ) as dev:
-        cut_inner(config, dev, plan)
+        cut_inner(config, dev, plan, software_buttons=args.software_buttons)
