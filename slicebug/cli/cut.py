@@ -246,10 +246,10 @@ def cut_inner(config, dev, plan, software_buttons=False):
                 resp = dev.recv()
                 if resp.status == PBInteractionStatus.riMatLoaded:
                     break
-                # Cricut Joy on macOS can emit status 143 after pressing Load.
-                # It is not named in this protobuf snapshot, but it appears to
-                # be an intermediate/ack status before the normal mat-loaded flow.
-                if resp.status == 143:
+                # Cricut Joy on macOS can emit unnamed intermediate statuses
+                # after software Load (observed: 143, 166) before the normal
+                # mat-loaded flow.
+                if resp.status in (143, 166):
                     continue
                 raise ProtocolError(
                     f"unexpected status while waiting for mat load: {resp.status}"
