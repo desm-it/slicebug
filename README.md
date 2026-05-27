@@ -71,15 +71,28 @@ Tools for Light Cardstock - 65 lb (176 gsm):
   ...
 ```
 
-To cut something out, you'll first need to create a _plan_. A plan is a file containing full instructions for how to cut a single mat: what to cut and with which tools. slicebug includes a command that can create a plan from an SVG, picking tools based on stroke color:
+To cut something out, you'll first need to create a _plan_. A plan is a file containing full instructions for how to cut a single mat: what to cut and with which tools. slicebug includes a command that can create a plan from an SVG, picking tools based on stroke color. Choose the mat dimensions with either a named preset or an explicit size:
 
 ```
 PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe plan examples\blobs.svg blobs_plan.json `
 >> --material 218 `
+>> --mat-preset maker-standard `
 >> --map 000000:fine_point_blade `
 >> --map ff0000:pen `
 >> --map 0000ff:pen
 ```
+
+You can also pass a custom mat size in inches:
+
+```
+PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe plan examples\blobs.svg blobs_plan.json `
+>> --material 218 `
+>> --mat-size 4.5x12 `
+>> --map 000000:fine_point_blade
+```
+
+Common presets include `joy-standard` and `joy-standard-long` (4.5 x 12 in), `joy-standard-short` (4.5 x 6.5 in), `joy-card` (4.5 x 6.25 in), `maker-standard` (12 x 12 in), and `maker-long` (12 x 24 in). The `joy-card` preset selects the card mat dimensions only; card-mat-specific machine behavior is not implemented separately. If the SVG is larger than the selected mat, slicebug prints a warning and still writes the plan for backwards compatibility; pass `--reject-oversize` to fail instead.
+
 (The tick \` at the end of a line means that the command continues on the next line. Try `slicebug plan --help` to learn about other options that this command accepts.)
 ```
 Found 3 paths:

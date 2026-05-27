@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os.path
 import re
 import subprocess
@@ -25,6 +26,65 @@ SVG_NS_PREFIX = "{http://www.w3.org/2000/svg}"
 
 def in_to_mm(x):
     return x * 25.4
+
+
+MAT_FIT_EPSILON = 1e-6
+
+MAT_PRESETS = {
+    # Cricut Joy adhesive mats.
+    "joy-standard": (4.5, 12.0),
+    "joy-standard-long": (4.5, 12.0),
+    "joy-standard-short": (4.5, 6.5),
+    # Cricut Joy card mat. This currently selects dimensions only; card-mat
+    # specific machine behavior is not implemented separately.
+    "joy-card": (4.5, 6.25),
+    # Common full-size Cricut mats for Maker/Explore-class machines.
+    "maker-standard": (12.0, 12.0),
+    "maker-long": (12.0, 24.0),
+}
+
+
+def parse_mat_size(string):
+    normalized = string.lower().replace("×", "x").replace(",", "x")
+    parts = normalized.split("x")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(
+            f"Invalid mat size {string}. Use WIDTHxHEIGHT in inches, "
+            "for example 4.5x12."
+        )
+
+    try:
+        width, height = (float(part.strip()) for part in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Invalid mat size {string}. Width and height must be numbers."
+        )
+
+    if not (math.isfinite(width) and math.isfinite(height)):
+        raise argparse.ArgumentTypeError(
+            "Mat width and height must be finite numbers."
+        )
+
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("Mat width and height must be positive.")
+
+    return width, height
+
+
+def resolve_mat(mat_preset, mat_size):
+    if mat_size is not None:
+        width, height = mat_size
+    else:
+        width, height = MAT_PRESETS[mat_preset]
+
+    return PlanMat(width=width, height=height)
+
+
+def material_fits_mat(material_width, material_height, mat):
+    return (
+        material_width <= mat.width + MAT_FIT_EPSILON
+        and material_height <= mat.height + MAT_FIT_EPSILON
+    )
 
 
 def matrix_transpose(a):
@@ -114,6 +174,35 @@ def plan_register_args(subparsers):
         type=int,
         required=True,
         help="ID of the material being cut (see list-materials).",
+    )
+    parser.add_argument(
+        "--mat-preset",
+        choices=sorted(MAT_PRESETS),
+        default="joy-standard",
+        help=(
+            "Mat preset. Defaults to joy-standard (4.5x12). Use --mat-size "
+            "to provide custom dimensions. The joy-card preset selects the "
+            "card mat dimensions only; card-mat-specific machine behavior is "
+            "not implemented separately."
+        ),
+    )
+    parser.add_argument(
+        "--mat-size",
+        type=parse_mat_size,
+        metavar="WIDTHxHEIGHT",
+        help=(
+            "Override mat dimensions in inches, for example 4.5x12 or "
+            "12x24. Unicode × and comma separators are also accepted."
+        ),
+    )
+    parser.add_argument(
+        "--reject-oversize",
+        action="store_true",
+        help=(
+            "Reject SVGs that are larger than the selected mat. By default, "
+            "oversize plans are still generated with a warning for backwards "
+            "compatibility."
+        ),
     )
 
     parser.set_defaults(cmd_handler=plan)
@@ -259,9 +348,24 @@ def plan(args, config):
 
         print(f" - {path_count} paths with stroke color {stroke}, {mapped}")
 
-    # Hardcoded for Cricut Joy 4.5 x 12 in mat during local experiments.
-    # TODO: expose this as CLI args / machine-profile defaults.
-    mat = PlanMat(width=4.5, height=12.0)
+    mat = resolve_mat(args.mat_preset, args.mat_size)
+    if not material_fits_mat(material_width, material_height, mat):
+        message = (
+            f"SVG is {material_width:.1f} x {material_height:.1f} in, "
+            f"which does not fit on the {mat.width:g} x {mat.height:g} in mat."
+        )
+        suggestion = (
+            "Choose a larger mat with --mat-preset/--mat-size, scale the SVG "
+            "down, or rotate the artwork in the SVG."
+        )
+        if args.reject_oversize:
+            raise UserError(message, suggestion)
+        print(f"Warning: {message}")
+        print(suggestion)
+    mat_description = args.mat_preset
+    if args.mat_size is not None:
+        mat_description = "custom"
+    print(f"Using {mat_description} mat: {mat.width:g} x {mat.height:g} in.")
     material = PlanMaterial(
         width=material_width,
         height=material_height,
