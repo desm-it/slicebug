@@ -56,6 +56,64 @@ def send_software_button(dev, status):
     )
 
 
+MAT_LOAD_IN_PROGRESS_STATUSES = (143, 165, 166, 167)
+
+
+def wait_for_mat_loaded(dev):
+    while True:
+        resp = dev.recv()
+        if resp.status == PBInteractionStatus.riMatLoaded:
+            return False
+        # Some Joy flows move straight from mat-motion messages to WaitClear
+        # without an explicit riMatLoaded message in this old protobuf flow.
+        if resp.status == PBInteractionStatus.riWaitClear:
+            return True
+        # Cricut Joy on macOS can emit newer mat-motion statuses that are not
+        # named in this older protobuf snapshot. Known from Design Space 8.27:
+        # 143=riMatInMotion; 165/166/167 are related mat-aligning/motion states.
+        if resp.status in MAT_LOAD_IN_PROGRESS_STATUSES:
+            continue
+        if resp.status == PBInteractionStatus.riMatUnloaded:
+            raise UserError(
+                "The mat was unloaded while SliceBug was waiting for it to load.",
+                "The Cricut Joy software Load/Unload control is a toggle. "
+                "The machine probably already considered the mat loaded, so "
+                "sending the virtual Load/Unload command ejected it.",
+            )
+        raise ProtocolError(
+            f"unexpected status while waiting for mat load: {resp.status}"
+        )
+
+
+def handle_software_mat_load(dev):
+    input("Insert mat, then press Enter to load it if needed.")
+
+    # Cricut Joy may auto-grab/measure the mat while the CLI is blocked at the
+    # prompt. Since the software Load/Unload command is a toggle, first consume
+    # any queued mat-load event before sending it; otherwise we can eject a mat
+    # that is already loaded.
+    resp = dev.recv_if_available(timeout=2.0)
+    if resp is not None:
+        if resp.status == PBInteractionStatus.riMatLoaded:
+            return False
+        if resp.status == PBInteractionStatus.riWaitClear:
+            return True
+        if resp.status in MAT_LOAD_IN_PROGRESS_STATUSES:
+            return wait_for_mat_loaded(dev)
+        if resp.status == PBInteractionStatus.riMatUnloaded:
+            raise UserError(
+                "The mat was unloaded before SliceBug sent the software Load command.",
+                "Reinsert the mat and retry. SliceBug did not send another "
+                "Load/Unload toggle to avoid ejecting it again.",
+            )
+        raise ProtocolError(
+            f"unexpected status before software mat load: {resp.status}"
+        )
+
+    send_software_button(dev, PBInteractionStatus.riMATCUTSimulateLoadButtonPressed)
+    return wait_for_mat_loaded(dev)
+
+
 def plan_tool_info(config, material, grouped_paths):
     tools = []
 
@@ -232,28 +290,15 @@ def cut_inner(config, dev, plan, software_buttons=False):
         print(f"Clamp {head_type.name}: {tool_description}")
     print()
 
+    wait_clear_seen = False
     resp = dev.recv()
     match resp.status:
         case PBInteractionStatus.riWaitOnMatLoad:
             if software_buttons:
-                input("Insert mat, then press Enter to send software Load.")
-                send_software_button(
-                    dev, PBInteractionStatus.riMATCUTSimulateLoadButtonPressed
-                )
+                wait_clear_seen = handle_software_mat_load(dev)
             else:
                 print("Insert mat and press the Load/Unload button.")
-            while True:
-                resp = dev.recv()
-                if resp.status == PBInteractionStatus.riMatLoaded:
-                    break
-                # Cricut Joy on macOS can emit unnamed intermediate statuses
-                # after software Load (observed: 143, 166) before the normal
-                # mat-loaded flow.
-                if resp.status in (143, 166):
-                    continue
-                raise ProtocolError(
-                    f"unexpected status while waiting for mat load: {resp.status}"
-                )
+                wait_clear_seen = wait_for_mat_loaded(dev)
         case PBInteractionStatus.riMatLoaded:
             print("Mat is already loaded.")
         case _:
@@ -261,13 +306,14 @@ def cut_inner(config, dev, plan, software_buttons=False):
                 f"unexpected status after material selected: {resp.status}"
             )
 
-    while True:
-        resp = dev.recv()
-        if resp.status == PBInteractionStatus.riWaitClear:
-            break
-        if resp.status == 143:
-            continue
-        raise ProtocolError(f"unexpected status before wait clear: {resp.status}")
+    if not wait_clear_seen:
+        while True:
+            resp = dev.recv()
+            if resp.status == PBInteractionStatus.riWaitClear:
+                break
+            if resp.status in MAT_LOAD_IN_PROGRESS_STATUSES:
+                continue
+            raise ProtocolError(f"unexpected status before wait clear: {resp.status}")
 
     dev.recv(PBInteractionStatus.riWaitOnGo)
     if software_buttons:

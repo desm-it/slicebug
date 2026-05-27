@@ -1,3 +1,5 @@
+import select
+
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives.ciphers import Cipher
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
@@ -35,3 +37,11 @@ class DevicePlugin(BasePlugin):
             )
 
         return message
+
+    def recv_if_available(self, timeout=0):
+        if self._process.stdout is None:
+            return None
+        ready, _, _ = select.select([self._process.stdout], [], [], timeout)
+        if not ready:
+            return None
+        return self.recv()
