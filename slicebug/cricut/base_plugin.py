@@ -9,6 +9,7 @@ class BasePlugin:
             self._path,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            bufsize=0,
         )
 
     def __enter__(self):
@@ -19,6 +20,15 @@ class BasePlugin:
 
     def close(self):
         self._process.terminate()
+        try:
+            self._process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=2)
+        if self._process.stdin is not None:
+            self._process.stdin.close()
+        if self._process.stdout is not None:
+            self._process.stdout.close()
 
     def send_bytes(self, message):
         message_len = struct.pack("<i", len(message))
