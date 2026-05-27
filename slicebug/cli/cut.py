@@ -318,7 +318,9 @@ def cut_inner(config, dev, plan, software_buttons=False):
     dev.recv(PBInteractionStatus.riWaitOnGo)
     if software_buttons:
         input("Press Enter to send software Go and start the cut.")
-        send_software_button(dev, PBInteractionStatus.riMATCUTSimulateCricutButtonPressed)
+        send_software_button(
+            dev, PBInteractionStatus.riMATCUTSimulateCricutButtonPressed
+        )
     else:
         print("Press the Go button.")
 

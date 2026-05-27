@@ -61,9 +61,7 @@ def parse_mat_size(string):
         )
 
     if not (math.isfinite(width) and math.isfinite(height)):
-        raise argparse.ArgumentTypeError(
-            "Mat width and height must be finite numbers."
-        )
+        raise argparse.ArgumentTypeError("Mat width and height must be finite numbers.")
 
     if width <= 0 or height <= 0:
         raise argparse.ArgumentTypeError("Mat width and height must be positive.")
