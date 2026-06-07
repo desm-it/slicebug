@@ -36,8 +36,23 @@ class BasePlugin:
         self._process.stdin.write(message)
         self._process.stdin.flush()
 
+    def _read_exactly(self, size):
+        if self._process.stdout is None:
+            raise EOFError("Plugin stdout is not available")
+        chunks = []
+        bytes_read = 0
+        while bytes_read < size:
+            chunk = self._process.stdout.read(size - bytes_read)
+            if not chunk:
+                raise EOFError(
+                    f"Plugin stdout closed while reading message: "
+                    f"expected {size} bytes, got {bytes_read}"
+                )
+            chunks.append(chunk)
+            bytes_read += len(chunk)
+        return b"".join(chunks)
+
     def recv_bytes(self):
-        message_len_encoded = self._process.stdout.read(4)
+        message_len_encoded = self._read_exactly(4)
         (message_len,) = struct.unpack("<i", message_len_encoded)
-        message = self._process.stdout.read(message_len)
-        return message
+        return self._read_exactly(message_len)

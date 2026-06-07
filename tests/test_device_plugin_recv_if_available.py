@@ -1,10 +1,42 @@
+import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from slicebug.cricut.base_plugin import BasePlugin
 from slicebug.cricut.device_plugin import DevicePlugin
 from slicebug.cricut.protobufs.Bridge_pb2 import PBInteractionStatus
+
+
+class ShortReadStdout:
+    def __init__(self, payload, max_chunk_size):
+        self._payload = payload
+        self._max_chunk_size = max_chunk_size
+        self._offset = 0
+
+    def read(self, size):
+        if self._offset >= len(self._payload):
+            return b""
+        chunk_size = min(size, self._max_chunk_size, len(self._payload) - self._offset)
+        chunk = self._payload[self._offset : self._offset + chunk_size]
+        self._offset += chunk_size
+        return chunk
+
+
+class BasePluginRecvBytesTest(unittest.TestCase):
+    def test_recv_bytes_keeps_reading_until_full_length_prefixed_message_arrives(self):
+        message = b"a protobuf frame larger than one pipe read"
+        payload = struct.pack("<i", len(message)) + message
+
+        plugin = BasePlugin.__new__(BasePlugin)
+        setattr(
+            plugin,
+            "_process",
+            type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+        )
+
+        self.assertEqual(plugin.recv_bytes(), message)
 
 
 class DevicePluginRecvIfAvailableTest(unittest.TestCase):
