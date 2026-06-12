@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.ciphers.algorithms import AES
 from cryptography.hazmat.primitives.ciphers.modes import ECB
 
 from slicebug.cricut.base_plugin import BasePlugin
-from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge
+from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge, PBInteractionStatus
 from slicebug.debug import describe_protobuf, log_debug
 from slicebug.exceptions import ProtocolError
 
@@ -39,6 +39,10 @@ class DevicePlugin(BasePlugin):
 
     def recv(self, expect=None):
         message = self._recv()
+        while self._is_ping_request(message):
+            log_debug("device.recv.ping", message=describe_protobuf(message))
+            self.send(PBCommonBridge(status=PBInteractionStatus.riPingReply))
+            message = self._recv()
 
         if (expect is not None) and (message.status != expect):
             log_debug(
@@ -53,6 +57,13 @@ class DevicePlugin(BasePlugin):
             )
 
         return message
+
+    @staticmethod
+    def _is_ping_request(message):
+        return (
+            message.HasField("handle")
+            and message.handle.currentInteraction == PBInteractionStatus.riPing
+        )
 
     def recv_if_available(self, timeout=0):
         if self._process.stdout is None:

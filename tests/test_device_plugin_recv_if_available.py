@@ -8,7 +8,11 @@ from pathlib import Path
 
 from slicebug.cricut.base_plugin import BasePlugin
 from slicebug.cricut.device_plugin import DevicePlugin
-from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge, PBInteractionStatus
+from slicebug.cricut.protobufs.Bridge_pb2 import (
+    PBCommonBridge,
+    PBInteractionHandle,
+    PBInteractionStatus,
+)
 from slicebug.exceptions import ProtocolError
 
 
@@ -75,6 +79,36 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
                 self.assertEqual(next_message.status, PBInteractionStatus.riWaitClear)
             finally:
                 dev.close()
+
+    def test_recv_answers_ping_handle_and_keeps_waiting_for_expected_status(self):
+        ping = PBCommonBridge(
+            handle=PBInteractionHandle(currentInteraction=PBInteractionStatus.riPing)
+        ).SerializeToString()
+        start_success = PBCommonBridge(
+            status=PBInteractionStatus.riStartSuccess
+        ).SerializeToString()
+        payload = (
+            struct.pack("<i", len(ping))
+            + ping
+            + struct.pack("<i", len(start_success))
+            + start_success
+        )
+        sent = []
+
+        dev = DevicePlugin.__new__(DevicePlugin)
+        setattr(dev, "_path", "CricutDevice.exe")
+        setattr(
+            dev,
+            "_process",
+            type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+        )
+        setattr(dev, "send", lambda message: sent.append(message))
+
+        response = dev.recv(PBInteractionStatus.riStartSuccess)
+
+        self.assertEqual(response.status, PBInteractionStatus.riStartSuccess)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
 
     def test_recv_unexpected_status_writes_debug_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
