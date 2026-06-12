@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.ciphers.modes import ECB
 
 from slicebug.cricut.base_plugin import BasePlugin
 from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge
+from slicebug.debug import describe_protobuf, log_debug
 from slicebug.exceptions import ProtocolError
 
 
@@ -23,17 +24,32 @@ class DevicePlugin(BasePlugin):
         return encryptor.update(padded) + encryptor.finalize()
 
     def send(self, message):
+        log_debug("device.send", message=describe_protobuf(message))
         self.send_bytes(self._encrypt_request(message))
 
     def _recv(self):
-        return PBCommonBridge.FromString(self.recv_bytes())
+        message_bytes = self.recv_bytes()
+        message = PBCommonBridge.FromString(message_bytes)
+        log_debug(
+            "device.recv",
+            byte_count=len(message_bytes),
+            message=describe_protobuf(message),
+        )
+        return message
 
     def recv(self, expect=None):
         message = self._recv()
 
         if (expect is not None) and (message.status != expect):
+            log_debug(
+                "device.recv.unexpected_status",
+                expected=int(expect),
+                received=int(message.status),
+                message=describe_protobuf(message),
+            )
             raise ProtocolError(
-                f"incorrect message status: expected {expect}, got {message.status}"
+                f"incorrect message status: expected {expect}, got {message.status}; "
+                f"message: {describe_protobuf(message)}"
             )
 
         return message

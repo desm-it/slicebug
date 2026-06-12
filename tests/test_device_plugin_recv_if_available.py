@@ -1,3 +1,5 @@
+import json
+import os
 import struct
 import sys
 import tempfile
@@ -6,7 +8,8 @@ from pathlib import Path
 
 from slicebug.cricut.base_plugin import BasePlugin
 from slicebug.cricut.device_plugin import DevicePlugin
-from slicebug.cricut.protobufs.Bridge_pb2 import PBInteractionStatus
+from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge, PBInteractionStatus
+from slicebug.exceptions import ProtocolError
 
 
 class ShortReadStdout:
@@ -72,6 +75,50 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
                 self.assertEqual(next_message.status, PBInteractionStatus.riWaitClear)
             finally:
                 dev.close()
+
+    def test_recv_unexpected_status_writes_debug_log(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_log = Path(temp_dir) / "slicebug-debug.log"
+            old_debug_log = os.environ.get("SLICEBUG_DEBUG_LOG")
+            os.environ["SLICEBUG_DEBUG_LOG"] = str(debug_log)
+            try:
+                message = PBCommonBridge(
+                    status=PBInteractionStatus.riError
+                ).SerializeToString()
+                payload = struct.pack("<i", len(message)) + message
+
+                dev = DevicePlugin.__new__(DevicePlugin)
+                setattr(dev, "_path", "CricutDevice.exe")
+                setattr(
+                    dev,
+                    "_process",
+                    type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+                )
+
+                with self.assertRaisesRegex(ProtocolError, "expected 2, got 0"):
+                    dev.recv(PBInteractionStatus.riStartSuccess)
+
+                entries = [
+                    json.loads(line)
+                    for line in debug_log.read_text(encoding="utf-8").splitlines()
+                ]
+                unexpected = [
+                    entry
+                    for entry in entries
+                    if entry["event"] == "device.recv.unexpected_status"
+                ][0]
+
+                self.assertEqual(unexpected["details"]["expected"], 2)
+                self.assertEqual(unexpected["details"]["received"], 0)
+                self.assertEqual(
+                    unexpected["details"]["message"]["statusName"],
+                    "riError",
+                )
+            finally:
+                if old_debug_log is None:
+                    os.environ.pop("SLICEBUG_DEBUG_LOG", None)
+                else:
+                    os.environ["SLICEBUG_DEBUG_LOG"] = old_debug_log
 
 
 if __name__ == "__main__":

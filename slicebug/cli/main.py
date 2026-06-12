@@ -9,8 +9,10 @@ from slicebug.cli.list_materials import list_materials_register_args
 from slicebug.cli.list_tools import list_tools_register_args
 from slicebug.cli.plan import plan_register_args
 from slicebug.config.config import Config
+from slicebug.debug import debug_log_path, log_debug, log_exception
 from slicebug.exceptions import UserError
 from slicebug.version import VERSION
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -26,6 +28,12 @@ def main():
     cut_register_args(subparsers)
 
     args = parser.parse_args()
+    log_debug(
+        "cli.start",
+        argv=sys.argv[1:],
+        version=VERSION,
+        debug_log_path=debug_log_path(),
+    )
 
     if "cmd_handler" not in args:
         parser.print_help()
@@ -34,6 +42,14 @@ def main():
     try:
         config_root = os.path.expanduser("~/.slicebug")
         config = Config.load(config_root, args.profile)
+        log_debug(
+            "cli.config_loaded",
+            config_root=config_root,
+            profile_name=config.profile_name,
+            has_keys=config.keys is not None,
+            has_profile=config.profile is not None,
+            command=getattr(args.cmd_handler, "__name__", str(args.cmd_handler)),
+        )
 
         if args.cmd_needs_profile and config.profile is None:
             raise UserError(
@@ -48,13 +64,19 @@ def main():
             )
 
         args.cmd_handler(args, config)
+        log_debug(
+            "cli.complete",
+            command=getattr(args.cmd_handler, "__name__", str(args.cmd_handler)),
+        )
     except UserError as err:
+        log_exception("cli.user_error", err)
         message, resolution = err.args
         print(f"Error: {message}", file=sys.stderr)
         if resolution is not None:
             print(resolution, file=sys.stderr)
         sys.exit(1)
     except Exception as err:
+        log_exception("cli.unexpected_error", err)
         traceback.print_exception(err)
         print("", file=sys.stderr)
         print("An unexpected error has occurred!", file=sys.stderr)
