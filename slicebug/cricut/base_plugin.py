@@ -1,5 +1,7 @@
 import struct
 import subprocess
+import threading
+from pathlib import Path
 
 from slicebug.debug import log_debug
 
@@ -7,13 +9,22 @@ from slicebug.debug import log_debug
 class BasePlugin:
     def __init__(self, path):
         self._path = path
-        log_debug("plugin.start", path=path)
+        plugin_cwd = str(Path(path).resolve().parent)
+        log_debug("plugin.start", path=path, cwd=plugin_cwd)
         self._process = subprocess.Popen(
             self._path,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             bufsize=0,
+            cwd=plugin_cwd,
         )
+        self._stderr_thread = threading.Thread(
+            target=self._log_stderr,
+            name="slicebug-plugin-stderr",
+            daemon=True,
+        )
+        self._stderr_thread.start()
 
     def __enter__(self):
         return self
@@ -34,6 +45,18 @@ class BasePlugin:
             self._process.stdin.close()
         if self._process.stdout is not None:
             self._process.stdout.close()
+        if self._process.stderr is not None:
+            self._process.stderr.close()
+
+    def _log_stderr(self):
+        if self._process.stderr is None:
+            return
+        for line in iter(self._process.stderr.readline, b""):
+            log_debug(
+                "plugin.stderr",
+                path=getattr(self, "_path", None),
+                line=line.decode(errors="replace").rstrip(),
+            )
 
     def send_bytes(self, message):
         log_debug(

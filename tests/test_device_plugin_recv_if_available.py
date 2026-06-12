@@ -1,10 +1,12 @@
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from slicebug.cricut.base_plugin import BasePlugin
 from slicebug.cricut.device_plugin import DevicePlugin
@@ -32,6 +34,25 @@ class ShortReadStdout:
 
 
 class BasePluginRecvBytesTest(unittest.TestCase):
+    def test_start_plugin_uses_plugin_directory_as_working_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_path = Path(temp_dir) / "device-common" / "CricutDevice.exe"
+            plugin_path.parent.mkdir()
+            process = MagicMock()
+            process.stderr.readline.return_value = b""
+
+            with patch(
+                "slicebug.cricut.base_plugin.subprocess.Popen", return_value=process
+            ) as popen:
+                plugin = BasePlugin(str(plugin_path))
+
+            self.assertEqual(plugin._path, str(plugin_path))
+            self.assertEqual(
+                popen.call_args.kwargs["cwd"],
+                str(plugin_path.parent.resolve()),
+            )
+            self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.PIPE)
+
     def test_recv_bytes_keeps_reading_until_full_length_prefixed_message_arrives(self):
         message = b"a protobuf frame larger than one pipe read"
         payload = struct.pack("<i", len(message)) + message
