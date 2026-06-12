@@ -57,6 +57,7 @@ def send_software_button(dev, status):
 
 
 MAT_LOAD_IN_PROGRESS_STATUSES = (143, 165, 166, 167)
+STARTUP_PING_TIMEOUT_SECONDS = 60.0
 
 
 def wait_for_mat_loaded(dev):
@@ -194,7 +195,10 @@ def cut_inner(config, dev, plan, software_buttons=False):
         )
     )
 
-    dev.recv(PBInteractionStatus.riStartSuccess)
+    dev.recv(
+        PBInteractionStatus.riStartSuccess,
+        ping_timeout=STARTUP_PING_TIMEOUT_SECONDS,
+    )
 
     device_connected_resp = dev.recv()
 

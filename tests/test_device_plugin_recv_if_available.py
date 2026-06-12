@@ -130,6 +130,35 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
         self.assertEqual(response.status, PBInteractionStatus.riStartSuccess)
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
+        self.assertTrue(sent[0].HasField("handle"))
+        self.assertEqual(sent[0].handle.currentInteraction, 999)
+
+    def test_recv_times_out_when_device_only_sends_pings(self):
+        ping = PBCommonBridge(
+            handle=PBInteractionHandle(currentInteraction=PBInteractionStatus.riPing)
+        ).SerializeToString()
+        payload = (
+            struct.pack("<i", len(ping)) + ping + struct.pack("<i", len(ping)) + ping
+        )
+        sent = []
+
+        dev = DevicePlugin.__new__(DevicePlugin)
+        setattr(dev, "_path", "CricutDevice.exe")
+        setattr(
+            dev,
+            "_process",
+            type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+        )
+        setattr(dev, "send", lambda message: sent.append(message))
+
+        with patch(
+            "slicebug.cricut.device_plugin.time.monotonic", side_effect=[0.0, 2.0]
+        ):
+            with self.assertRaisesRegex(ProtocolError, "kept sending ping frames"):
+                dev.recv(PBInteractionStatus.riStartSuccess, ping_timeout=1.0)
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
 
     def test_recv_unexpected_status_writes_debug_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
