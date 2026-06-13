@@ -138,6 +138,7 @@ message PBCommonBridge {
   PBCricutDeviceSerialized device = 9;
   PBBridgeSelectedTools toolInfo = 14;
   PBUserSettings authData = 17;
+  string logId = 69;
   PBMatPathData matPathData = 22;
   PBAnalyticMachineSummary deviceAnalyticMachineSummary = 79;
   PBMaterialSelected materialSelectedPayload = 111;

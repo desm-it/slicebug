@@ -134,31 +134,71 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
         self.assertEqual(sent[0].handle.currentInteraction, 999)
 
     def test_recv_times_out_when_device_only_sends_pings(self):
-        ping = PBCommonBridge(
-            handle=PBInteractionHandle(currentInteraction=PBInteractionStatus.riPing)
-        ).SerializeToString()
-        payload = (
-            struct.pack("<i", len(ping)) + ping + struct.pack("<i", len(ping)) + ping
-        )
-        sent = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_path = Path(temp_dir) / "device-common" / "CricutDevice.exe"
+            bridge_log_path = plugin_path.parent / "logs" / "bridge.log"
+            bridge_log_path.parent.mkdir(parents=True)
+            bridge_log_path.write_text("native helper clue", encoding="utf-8")
 
-        dev = DevicePlugin.__new__(DevicePlugin)
-        setattr(dev, "_path", "CricutDevice.exe")
-        setattr(
-            dev,
-            "_process",
-            type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
-        )
-        setattr(dev, "send", lambda message: sent.append(message))
+            debug_log = Path(temp_dir) / "slicebug-debug.log"
+            old_debug_log = os.environ.get("SLICEBUG_DEBUG_LOG")
+            os.environ["SLICEBUG_DEBUG_LOG"] = str(debug_log)
+            try:
+                ping = PBCommonBridge(
+                    handle=PBInteractionHandle(
+                        currentInteraction=PBInteractionStatus.riPing
+                    )
+                ).SerializeToString()
+                payload = (
+                    struct.pack("<i", len(ping))
+                    + ping
+                    + struct.pack("<i", len(ping))
+                    + ping
+                )
+                sent = []
 
-        with patch(
-            "slicebug.cricut.device_plugin.time.monotonic", side_effect=[0.0, 2.0]
-        ):
-            with self.assertRaisesRegex(ProtocolError, "kept sending ping frames"):
-                dev.recv(PBInteractionStatus.riStartSuccess, ping_timeout=1.0)
+                dev = DevicePlugin.__new__(DevicePlugin)
+                setattr(dev, "_path", str(plugin_path))
+                setattr(
+                    dev,
+                    "_process",
+                    type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+                )
+                setattr(dev, "send", lambda message: sent.append(message))
 
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
+                with patch(
+                    "slicebug.cricut.device_plugin.time.monotonic",
+                    side_effect=[0.0, 2.0],
+                ):
+                    with self.assertRaisesRegex(
+                        ProtocolError, "kept sending ping frames"
+                    ):
+                        dev.recv(PBInteractionStatus.riStartSuccess, ping_timeout=1.0)
+
+                self.assertEqual(len(sent), 1)
+                self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
+
+                entries = [
+                    json.loads(line)
+                    for line in debug_log.read_text(encoding="utf-8").splitlines()
+                ]
+                timeout = [
+                    entry
+                    for entry in entries
+                    if entry["event"] == "device.recv.ping_timeout"
+                ][0]
+                first_bridge_log = timeout["details"]["bridge_log"]["candidates"][0]
+
+                self.assertTrue(first_bridge_log["exists"])
+                self.assertEqual(
+                    first_bridge_log["path"], str(bridge_log_path.resolve())
+                )
+                self.assertEqual(first_bridge_log["tail"], "native helper clue")
+            finally:
+                if old_debug_log is None:
+                    os.environ.pop("SLICEBUG_DEBUG_LOG", None)
+                else:
+                    os.environ["SLICEBUG_DEBUG_LOG"] = old_debug_log
 
     def test_recv_unexpected_status_writes_debug_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:

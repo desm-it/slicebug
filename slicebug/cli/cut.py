@@ -60,6 +60,15 @@ MAT_LOAD_IN_PROGRESS_STATUSES = (143, 165, 166, 167)
 STARTUP_PING_TIMEOUT_SECONDS = 60.0
 
 
+def make_start_message(config, interaction):
+    # Matches the startup envelope Design Space sends to CricutDevice.
+    return PBCommonBridge(
+        interaction=interaction,
+        logId="DEVICE",
+        authData=PBUserSettings(settings8=config.keys.settings8_raw),
+    )
+
+
 def wait_for_mat_loaded(dev):
     while True:
         resp = dev.recv()
@@ -188,12 +197,7 @@ def cut_inner(config, dev, plan, software_buttons=False):
 
     material = material_settings.materials[plan.material.cricut_api_global_id]
 
-    dev.send(
-        PBCommonBridge(
-            interaction=PBInteractionStatus.riMATCUT,
-            authData=PBUserSettings(settings8=config.keys.settings8_raw),
-        )
-    )
+    dev.send(make_start_message(config, PBInteractionStatus.riMATCUT))
 
     dev.recv(
         PBInteractionStatus.riStartSuccess,
