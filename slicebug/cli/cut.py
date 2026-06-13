@@ -1,5 +1,6 @@
 import argparse
 import json
+import os.path
 import platform
 
 from slicebug.cricut.device_plugin import DevicePlugin
@@ -22,6 +23,7 @@ from slicebug.cricut.protobufs.Bridge_pb2 import (
 from slicebug.exceptions import ProtocolError, UserError
 from slicebug.plan.plan import Plan, PlanPathStep
 from slicebug.cricut.tools import HeadType, TOOLS_BY_PB_TOOL_TYPE
+from slicebug.debug import log_debug
 from slicebug.plan.group_paths import (
     first_pen_path_in_group,
     first_tool_in_group,
@@ -41,6 +43,14 @@ def cut_register_args(subparsers):
             "Use CricutDevice software button simulation messages instead of "
             "waiting for physical Load/Unload and Go buttons. This is needed "
             "for buttonless machines such as Cricut Joy."
+        ),
+    )
+    parser.add_argument(
+        "--device-plugin-path",
+        help=(
+            "Use a specific CricutDevice executable instead of the bootstrapped "
+            "copy. Useful for testing the helper directly from the Design Space "
+            "installation directory."
         ),
     )
 
@@ -72,6 +82,27 @@ def make_start_message(config, interaction):
     if platform.system() == "Windows":
         message.logLevel = PBLogLevel.VERBOSE_LOGLEVEL
     return message
+
+
+def resolve_device_plugin_path(args, config):
+    if args.device_plugin_path is not None:
+        path = os.path.abspath(os.path.expanduser(args.device_plugin_path))
+        if not os.path.exists(path):
+            raise UserError(
+                f"Device plugin override does not exist: {path}",
+                "Check the CricutDevice path and try again.",
+            )
+        log_debug("cut.device_plugin_override", path=path)
+        return path
+
+    path = config.device_plugin_path()
+    if path is None:
+        raise UserError(
+            "Device plugin is missing.",
+            "Try running `slicebug bootstrap`.",
+        )
+    log_debug("cut.device_plugin_configured", path=path)
+    return path
 
 
 def wait_for_mat_loaded(dev):
@@ -463,14 +494,9 @@ def cut_inner(config, dev, plan, software_buttons=False):
 
 
 def cut(args, config):
-    if config.device_plugin_path() is None:
-        raise UserError(
-            "Device plugin is missing.", "Try running `slicebug bootstrap`."
-        )
+    device_plugin_path = resolve_device_plugin_path(args, config)
 
     plan = Plan.from_json(json.load(args.plan))
 
-    with DevicePlugin(
-        config.device_plugin_path(), config.keys.cricutdevice_request_key
-    ) as dev:
+    with DevicePlugin(device_plugin_path, config.keys.cricutdevice_request_key) as dev:
         cut_inner(config, dev, plan, software_buttons=args.software_buttons)

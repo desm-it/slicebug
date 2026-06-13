@@ -105,10 +105,13 @@ class BootstrapUserSelectionTest(unittest.TestCase):
             plugin_root = cds_root / "resources" / "plugins"
             old_source = plugin_root / "device-common"
             next_source = plugin_root / "device-common-next"
+            io_source = plugin_root / "cricut-device-io"
             old_source.mkdir(parents=True)
             next_source.mkdir(parents=True)
+            io_source.mkdir(parents=True)
             (old_source / "CricutDevice.exe").write_text("old", encoding="utf-8")
             (next_source / "CricutDevice.exe").write_text("next", encoding="utf-8")
+            (io_source / "CricutDeviceIO.exe").write_text("io", encoding="utf-8")
 
             config_root = temp_path / ".slicebug"
             config = type(
@@ -122,10 +125,17 @@ class BootstrapUserSelectionTest(unittest.TestCase):
             ):
                 import_plugins(str(cds_root), config)
 
-            destination = config_root / "plugins" / "device-common"
+            old_destination = config_root / "plugins" / "device-common"
+            next_destination = config_root / "plugins" / "device-common-next"
+            io_destination = config_root / "plugins" / "cricut-device-io"
+            self.assertFalse(old_destination.exists())
             self.assertEqual(
-                (destination / "CricutDevice.exe").read_text(encoding="utf-8"),
+                (next_destination / "CricutDevice.exe").read_text(encoding="utf-8"),
                 "next",
+            )
+            self.assertEqual(
+                (io_destination / "CricutDeviceIO.exe").read_text(encoding="utf-8"),
+                "io",
             )
 
     def test_import_plugins_keeps_macos_on_device_common(self):

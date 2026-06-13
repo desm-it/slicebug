@@ -69,12 +69,17 @@ class Config:
 
     def device_plugin_path(self):
         exe_name = "CricutDevice" + _exe_suffix()
-        path = os.path.join(self.config_root, "plugins", "device-common", exe_name)
+        if platform.system() == "Windows":
+            plugin_candidates = ["device-common-next", "device-common"]
+        else:
+            plugin_candidates = ["device-common"]
 
-        if not os.path.exists(path):
-            return None
+        for plugin in plugin_candidates:
+            path = os.path.join(self.config_root, "plugins", plugin, exe_name)
+            if os.path.exists(path):
+                return path
 
-        return path
+        return None
 
     def usvg_path(self):
         exe_name = "usvg" + _exe_suffix()
