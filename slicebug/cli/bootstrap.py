@@ -9,9 +9,11 @@ import shutil
 import urllib.request
 import zipfile
 from collections import defaultdict
+from dataclasses import dataclass
 
 from slicebug.config.keys import Keys
 from slicebug.config.machine_profile import MachineProfile, MachineProfiles
+from slicebug.debug import log_debug
 from slicebug.exceptions import UserError
 
 
@@ -62,6 +64,93 @@ def bootstrap_register_args(subparsers):
     parser.set_defaults(cmd_needs_keys=False)
 
 
+@dataclass(frozen=True)
+class CdsUserData:
+    name: str
+    has_user_settings: bool
+    machine_serials: list[str]
+    user_settings_mtime: float
+
+
+def _user_settings_path(cds_profile_root, cds_user):
+    return os.path.join(
+        cds_profile_root, "LocalData", cds_user, "UserSessionData", "UserSettings"
+    )
+
+
+def _machine_settings_root(cds_profile_root, cds_user):
+    return os.path.join(cds_profile_root, "LocalData", cds_user, "MaterialSettings")
+
+
+def inspect_cds_user(cds_profile_root, cds_user):
+    user_settings_path = _user_settings_path(cds_profile_root, cds_user)
+    has_user_settings = os.path.isfile(user_settings_path)
+    user_settings_mtime = (
+        os.path.getmtime(user_settings_path) if has_user_settings else 0.0
+    )
+    machine_serials = []
+    material_settings_root = _machine_settings_root(cds_profile_root, cds_user)
+    if os.path.isdir(material_settings_root):
+        machine_serials = sorted(
+            subdir.name
+            for subdir in os.scandir(material_settings_root)
+            if subdir.is_dir()
+            and os.path.isfile(os.path.join(subdir.path, "MaterialSettings"))
+        )
+    return CdsUserData(
+        name=cds_user,
+        has_user_settings=has_user_settings,
+        machine_serials=machine_serials,
+        user_settings_mtime=user_settings_mtime,
+    )
+
+
+def choose_keys_user(cds_profile_root, cds_users):
+    inspected_users = [inspect_cds_user(cds_profile_root, user) for user in cds_users]
+    users_with_settings = [user for user in inspected_users if user.has_user_settings]
+    users_with_settings_and_profiles = [
+        user for user in users_with_settings if len(user.machine_serials) > 0
+    ]
+
+    if len(users_with_settings_and_profiles) == 1:
+        chosen = users_with_settings_and_profiles[0]
+        reason = "only user with keys and machine profiles"
+    elif len(users_with_settings_and_profiles) > 1:
+        chosen = max(
+            users_with_settings_and_profiles,
+            key=lambda user: user.user_settings_mtime,
+        )
+        reason = "newest user settings among users with machine profiles"
+    elif len(users_with_settings) > 0:
+        chosen = max(users_with_settings, key=lambda user: user.user_settings_mtime)
+        reason = "newest user settings"
+    elif len(inspected_users) > 0:
+        chosen = inspected_users[0]
+        reason = "first local data user without user settings"
+    else:
+        raise UserError(
+            "No user data found in the CDS profile.",
+            "Ensure that CDS has been used to make at least one cut.",
+        )
+
+    log_debug(
+        "bootstrap.keys_user_selected",
+        chosen_user=chosen.name,
+        reason=reason,
+        users=[
+            {
+                "name": user.name,
+                "has_user_settings": user.has_user_settings,
+                "machine_serials": user.machine_serials,
+                "user_settings_mtime": user.user_settings_mtime,
+            }
+            for user in inspected_users
+        ],
+    )
+    print(f"Using Design Space user data from {chosen.name} ({reason}).")
+    return chosen.name
+
+
 def import_keys(cds_root, cds_profile_root, cds_user, config):
     xor = lambda data, key: bytes(v ^ key[i % len(key)] for i, v in enumerate(data))
 
@@ -84,9 +173,7 @@ def import_keys(cds_root, cds_profile_root, cds_user, config):
             int(x, 16) for x in matches[0].group(1).decode().split(",")
         )
 
-    user_settings_path = os.path.join(
-        cds_profile_root, "LocalData", cds_user, "UserSessionData", "UserSettings"
-    )
+    user_settings_path = _user_settings_path(cds_profile_root, cds_user)
     print(f"Importing keys from {user_settings_path}.")
 
     with open(user_settings_path) as f:
@@ -124,10 +211,13 @@ def import_plugins(cds_root, config):
 
     for plugin in ["device-common"]:
         print(f"Importing plugin {plugin}.")
+        destination = os.path.join(config.plugin_root(), plugin)
+        if os.path.exists(destination):
+            print(f"Removing existing plugin {plugin}.")
+            shutil.rmtree(destination)
         shutil.copytree(
             os.path.join(plugin_dir, plugin),
-            os.path.join(config.plugin_root(), plugin),
-            dirs_exist_ok=True,
+            destination,
         )
 
     print("Plugins imported.")
@@ -138,11 +228,12 @@ def import_machine_profiles(cds_profile_root, cds_users, config):
     # TODO: make this more user-friendly for the case where the same serial appears for multiple users?
     machines_found = []
     for user in cds_users:
+        material_settings_root = _machine_settings_root(cds_profile_root, user)
+        if not os.path.isdir(material_settings_root):
+            continue
         machines_found.extend(
             (subdir.name, subdir.path)
-            for subdir in os.scandir(
-                os.path.join(cds_profile_root, "LocalData", user, "MaterialSettings")
-            )
+            for subdir in os.scandir(material_settings_root)
             if subdir.is_dir()
         )
 
@@ -264,9 +355,11 @@ def bootstrap(args, config):
             "Ensure that CDS has been used to make at least one cut.",
         )
 
+    keys_user = choose_keys_user(args.design_space_profile_path, cds_users)
+
     import_plugins(args.design_space_path, config)
     import_keys(
-        args.design_space_path, args.design_space_profile_path, cds_users[0], config
+        args.design_space_path, args.design_space_profile_path, keys_user, config
     )
     import_machine_profiles(args.design_space_profile_path, cds_users, config)
     download_usvg(config)
