@@ -98,9 +98,9 @@ message PBLog {
   string title = 1;
   string message = 2;
   PBLogLevel level = 3;
-  bytes command = 4;
+  string command = 4;
   bool sentToMachine = 5;
-  bytes unencryptedFull = 6;
+  string unencryptedFull = 6;
 }
 
 message PBCricutDeviceSerialized {

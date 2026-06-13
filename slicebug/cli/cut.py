@@ -1,5 +1,6 @@
 import argparse
 import json
+import platform
 
 from slicebug.cricut.device_plugin import DevicePlugin
 from slicebug.cricut.material_settings import MaterialSettings
@@ -13,6 +14,7 @@ from slicebug.cricut.protobufs.Bridge_pb2 import (
     PBCommonBridge,
     PBInteractionHandle,
     PBInteractionStatus,
+    PBLogLevel,
     PBMaterialSelected,
     PBMatPathData,
     PBToolInfo,
@@ -62,11 +64,14 @@ STARTUP_PING_TIMEOUT_SECONDS = 60.0
 
 def make_start_message(config, interaction):
     # Matches the startup envelope Design Space sends to CricutDevice.
-    return PBCommonBridge(
+    message = PBCommonBridge(
         interaction=interaction,
         logId="DEVICE",
         authData=PBUserSettings(settings8=config.keys.settings8_raw),
     )
+    if platform.system() == "Windows":
+        message.logLevel = PBLogLevel.VERBOSE_LOGLEVEL
+    return message
 
 
 def wait_for_mat_loaded(dev):

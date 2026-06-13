@@ -98,6 +98,66 @@ class BootstrapUserSelectionTest(unittest.TestCase):
             self.assertTrue((destination / "CricutDevice.exe").exists())
             self.assertFalse((destination / "stale.dll").exists())
 
+    def test_import_plugins_prefers_windows_device_common_next_when_available(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cds_root = temp_path / "Design Space"
+            plugin_root = cds_root / "resources" / "plugins"
+            old_source = plugin_root / "device-common"
+            next_source = plugin_root / "device-common-next"
+            old_source.mkdir(parents=True)
+            next_source.mkdir(parents=True)
+            (old_source / "CricutDevice.exe").write_text("old", encoding="utf-8")
+            (next_source / "CricutDevice.exe").write_text("next", encoding="utf-8")
+
+            config_root = temp_path / ".slicebug"
+            config = type(
+                "Config",
+                (),
+                {"plugin_root": lambda _self: str(config_root / "plugins")},
+            )()
+
+            with patch(
+                "slicebug.cli.bootstrap.platform.system", return_value="Windows"
+            ):
+                import_plugins(str(cds_root), config)
+
+            destination = config_root / "plugins" / "device-common"
+            self.assertEqual(
+                (destination / "CricutDevice.exe").read_text(encoding="utf-8"),
+                "next",
+            )
+
+    def test_import_plugins_keeps_macos_on_device_common(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cds_root = temp_path / "Design Space"
+            plugin_root = cds_root / "plugins"
+            old_source = plugin_root / "device-common"
+            next_source = plugin_root / "device-common-next"
+            old_source.mkdir(parents=True)
+            next_source.mkdir(parents=True)
+            (old_source / "CricutDevice").write_text("old", encoding="utf-8")
+            (next_source / "CricutDevice").write_text("next", encoding="utf-8")
+
+            config_root = temp_path / ".slicebug"
+            config = type(
+                "Config",
+                (),
+                {"plugin_root": lambda _self: str(config_root / "plugins")},
+            )()
+
+            with patch(
+                "slicebug.cli.bootstrap.platform.system", return_value="Darwin"
+            ):
+                import_plugins(str(cds_root), config)
+
+            destination = config_root / "plugins" / "device-common"
+            self.assertEqual(
+                (destination / "CricutDevice").read_text(encoding="utf-8"),
+                "old",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

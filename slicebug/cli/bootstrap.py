@@ -209,19 +209,56 @@ def import_plugins(cds_root, config):
         plugin_dir = os.path.join(cds_root, "resources", "plugins")
     print(f"Importing plugins from {cds_root}.")
 
-    for plugin in ["device-common"]:
-        print(f"Importing plugin {plugin}.")
-        destination = os.path.join(config.plugin_root(), plugin)
-        if os.path.exists(destination):
-            print(f"Removing existing plugin {plugin}.")
-            shutil.rmtree(destination)
-        shutil.copytree(
-            os.path.join(plugin_dir, plugin),
-            destination,
+    for destination_plugin, source_plugin in _device_plugin_imports(plugin_dir):
+        source = os.path.join(plugin_dir, source_plugin)
+        destination = os.path.join(config.plugin_root(), destination_plugin)
+        print(f"Importing plugin {destination_plugin} from {source_plugin}.")
+        log_debug(
+            "bootstrap.plugin_source_selected",
+            destination_plugin=destination_plugin,
+            source_plugin=source_plugin,
+            source=source,
+            destination=destination,
+            platform=platform.system(),
         )
+        if os.path.exists(destination):
+            print(f"Removing existing plugin {destination_plugin}.")
+            shutil.rmtree(destination)
+        shutil.copytree(source, destination)
 
     print("Plugins imported.")
     print()
+
+
+def _device_plugin_imports(plugin_dir):
+    if platform.system() == "Windows":
+        candidates = ["device-common-next", "device-common"]
+    else:
+        candidates = ["device-common"]
+
+    checked = []
+    for source_plugin in candidates:
+        source = os.path.join(plugin_dir, source_plugin)
+        checked.append(
+            {
+                "plugin": source_plugin,
+                "path": source,
+                "exists": os.path.isdir(source),
+            }
+        )
+        if os.path.isdir(source):
+            return [("device-common", source_plugin)]
+
+    log_debug(
+        "bootstrap.plugin_source_missing",
+        destination_plugin="device-common",
+        candidates=checked,
+        platform=platform.system(),
+    )
+    raise UserError(
+        "Design Space device helper plugin was not found.",
+        "Reinstall or update Design Space, then run `slicebug bootstrap` again.",
+    )
 
 
 def import_machine_profiles(cds_profile_root, cds_users, config):
