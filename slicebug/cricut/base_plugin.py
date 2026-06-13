@@ -7,12 +7,14 @@ from slicebug.debug import log_debug
 
 
 class BasePlugin:
-    def __init__(self, path):
+    def __init__(self, path, args=None):
         self._path = path
+        self._args = list(args or [])
         plugin_cwd = str(Path(path).resolve().parent)
-        log_debug("plugin.start", path=path, cwd=plugin_cwd)
+        command = [self._path, *self._args]
+        log_debug("plugin.start", path=path, args=self._args, cwd=plugin_cwd)
         self._process = subprocess.Popen(
-            self._path,
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -21,7 +21,7 @@ from slicebug.exceptions import ProtocolError
 
 class DevicePlugin(BasePlugin):
     def __init__(self, path, request_key):
-        super().__init__(path)
+        super().__init__(path, args=["bridge"])
         self._request_key = request_key
 
     def _encrypt_request(self, message):
