@@ -35,6 +35,26 @@ class ShortReadStdout:
         return chunk
 
 
+class ShortWriteStdin:
+    def __init__(self, max_chunk_size):
+        self._max_chunk_size = max_chunk_size
+        self.writes = []
+        self.flushed = False
+
+    def write(self, data):
+        chunk_size = min(len(data), self._max_chunk_size)
+        self.writes.append(bytes(data[:chunk_size]))
+        return chunk_size
+
+    def flush(self):
+        self.flushed = True
+
+
+class ZeroWriteStdin:
+    def write(self, data):
+        return 0
+
+
 class BasePluginRecvBytesTest(unittest.TestCase):
     def test_start_plugin_uses_plugin_directory_as_working_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,6 +102,26 @@ class BasePluginRecvBytesTest(unittest.TestCase):
         )
 
         self.assertEqual(plugin.recv_bytes(), message)
+
+    def test_send_bytes_keeps_writing_until_full_length_prefixed_message_is_sent(self):
+        message = b"a large encrypted startup frame"
+        stdin = ShortWriteStdin(max_chunk_size=5)
+        plugin = BasePlugin.__new__(BasePlugin)
+        setattr(plugin, "_path", "CricutDevice.exe")
+        setattr(plugin, "_process", type("Process", (), {"stdin": stdin})())
+
+        plugin.send_bytes(message)
+
+        self.assertEqual(b"".join(stdin.writes), struct.pack("<i", len(message)) + message)
+        self.assertTrue(stdin.flushed)
+
+    def test_send_bytes_errors_when_pipe_accepts_no_bytes(self):
+        plugin = BasePlugin.__new__(BasePlugin)
+        setattr(plugin, "_path", "CricutDevice.exe")
+        setattr(plugin, "_process", type("Process", (), {"stdin": ZeroWriteStdin()})())
+
+        with self.assertRaises(BrokenPipeError):
+            plugin.send_bytes(b"message")
 
 
 class DevicePluginRecvIfAvailableTest(unittest.TestCase):

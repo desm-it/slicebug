@@ -1,3 +1,4 @@
+import hashlib
 import struct
 import subprocess
 import threading
@@ -61,15 +62,55 @@ class BasePlugin:
             )
 
     def send_bytes(self, message):
+        # The frame is a little-endian int32 length prefix followed by the body.
+        # We build it as a single buffer and write it in full: with bufsize=0 the
+        # child's stdin is a raw stream whose write() is allowed to short-write,
+        # so a single unchecked write() can silently truncate a large frame. This
+        # bites large frames (the ~5552-byte encrypted cut startup message) on
+        # platforms with small pipe buffers (Windows) while working on macOS,
+        # leaving the native helper waiting forever for the rest of the frame.
+        frame = struct.pack("<i", len(message)) + message
         log_debug(
             "plugin.send_bytes",
             path=getattr(self, "_path", None),
             byte_count=len(message),
+            frame_bytes=len(frame),
+            payload_sha256=hashlib.sha256(message).hexdigest()[:16],
         )
-        message_len = struct.pack("<i", len(message))
-        self._process.stdin.write(message_len)
-        self._process.stdin.write(message)
+        written = self._write_all(frame)
         self._process.stdin.flush()
+        if written != len(frame):
+            log_debug(
+                "plugin.send_bytes.incomplete",
+                path=getattr(self, "_path", None),
+                expected=len(frame),
+                written=written,
+            )
+
+    def _write_all(self, data):
+        stdin = self._process.stdin
+        if stdin is None:
+            raise BrokenPipeError("Plugin stdin is not available")
+        view = memoryview(data)
+        total = 0
+        short_writes = 0
+        while total < len(view):
+            written = stdin.write(view[total:])
+            if written is None:
+                raise BlockingIOError("Plugin stdin write would block")
+            if written == 0:
+                raise BrokenPipeError("Plugin stdin accepted 0 bytes")
+            if written < len(view) - total:
+                short_writes += 1
+            total += written
+        if short_writes:
+            log_debug(
+                "plugin.send_bytes.short_writes",
+                path=getattr(self, "_path", None),
+                short_writes=short_writes,
+                total=total,
+            )
+        return total
 
     def _read_exactly(self, size):
         if self._process.stdout is None:
