@@ -49,47 +49,57 @@ class DevicePlugin(BasePlugin):
         message = self._recv()
         ping_started_at = None
         ping_count = 0
-        while self._is_ping_request(message):
-            ping_count += 1
-            now = time.monotonic()
-            if ping_started_at is None:
-                ping_started_at = now
-            elapsed = now - ping_started_at
-            log_debug(
-                "device.recv.ping",
-                message=describe_protobuf(message),
-                ping_count=ping_count,
-                elapsed_seconds=elapsed,
-                ping_timeout_seconds=ping_timeout,
-            )
-            if ping_timeout is not None and elapsed >= ping_timeout:
-                bridge_log = self._bridge_log_details()
+
+        while True:
+            if self._is_log_message(message):
+                self._log_helper_message(message)
+                message = self._recv()
+                continue
+
+            if self._is_ping_request(message):
+                ping_count += 1
+                now = time.monotonic()
+                if ping_started_at is None:
+                    ping_started_at = now
+                elapsed = now - ping_started_at
                 log_debug(
-                    "device.recv.ping_timeout",
-                    expected=int(expect) if expect is not None else None,
+                    "device.recv.ping",
+                    message=describe_protobuf(message),
                     ping_count=ping_count,
                     elapsed_seconds=elapsed,
                     ping_timeout_seconds=ping_timeout,
-                    message=describe_protobuf(message),
-                    bridge_log=bridge_log,
                 )
-                bridge_log_hint = ""
-                if bridge_log["candidates"]:
-                    bridge_log_hint = (
-                        f" Native helper log checked: "
-                        f"{bridge_log['candidates'][0]['path']}."
+                if ping_timeout is not None and elapsed >= ping_timeout:
+                    bridge_log = self._bridge_log_details()
+                    log_debug(
+                        "device.recv.ping_timeout",
+                        expected=int(expect) if expect is not None else None,
+                        ping_count=ping_count,
+                        elapsed_seconds=elapsed,
+                        ping_timeout_seconds=ping_timeout,
+                        message=describe_protobuf(message),
+                        bridge_log=bridge_log,
                     )
-                raise ProtocolError(
-                    "CricutDevice kept sending ping frames and never reported "
-                    f"the expected startup status after {elapsed:.1f}s "
-                    f"({ping_count} pings). This usually means the Design Space "
-                    "device helper is stuck while scanning or opening the cutter. "
-                    "Close Design Space, make sure the cutter is awake and not "
-                    "connected to another computer, then try again."
-                    f"{bridge_log_hint}"
-                )
-            self.send(self._ping_reply())
-            message = self._recv()
+                    bridge_log_hint = ""
+                    if bridge_log["candidates"]:
+                        bridge_log_hint = (
+                            f" Native helper log checked: "
+                            f"{bridge_log['candidates'][0]['path']}."
+                        )
+                    raise ProtocolError(
+                        "CricutDevice kept sending ping frames and never reported "
+                        f"the expected startup status after {elapsed:.1f}s "
+                        f"({ping_count} pings). This usually means the Design Space "
+                        "device helper is stuck while scanning or opening the cutter. "
+                        "Close Design Space, make sure the cutter is awake and not "
+                        "connected to another computer, then try again."
+                        f"{bridge_log_hint}"
+                    )
+                self.send(self._ping_reply())
+                message = self._recv()
+                continue
+
+            break
 
         if (expect is not None) and (message.status != expect):
             log_debug(
@@ -110,6 +120,22 @@ class DevicePlugin(BasePlugin):
         return (
             message.HasField("handle")
             and message.handle.currentInteraction == PBInteractionStatus.riPing
+        )
+
+    @staticmethod
+    def _is_log_message(message):
+        return (
+            message.status == PBInteractionStatus.riLogMessage
+            or message.interaction == PBInteractionStatus.riLogMessage
+        )
+
+    @staticmethod
+    def _log_helper_message(message):
+        log_debug(
+            "device.recv.log_message",
+            message=describe_protobuf(message),
+            logs=[describe_protobuf(log) for log in message.logs],
+            log_count=len(message.logs),
         )
 
     @staticmethod

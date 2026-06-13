@@ -9,6 +9,9 @@ enum PBInteractionStatus {
   riPing = 4;
   riPingReply = 5;
   riCloseInteractionSuccess = 6;
+  riLogMessage = 7;
+  riGetLogLevel = 8;
+  riSetLogLevel = 9;
   riNoDeviceConnected = 101;
   riMultipleDevicesConnected = 102;
   riSingleDeviceConnected = 103;
@@ -82,6 +85,24 @@ enum PBConnectionType {
   BLE_CT = 4;
 }
 
+enum PBLogLevel {
+  ERROR_LOGLEVEL = 0;
+  WARNING_LOGLEVEL = 1;
+  INFO_LOGLEVEL = 2;
+  DEBUG_LOGLEVEL = 3;
+  TRACE_LOGLEVEL = 4;
+  VERBOSE_LOGLEVEL = 5;
+}
+
+message PBLog {
+  string title = 1;
+  string message = 2;
+  PBLogLevel level = 3;
+  bytes command = 4;
+  bool sentToMachine = 5;
+  bytes unencryptedFull = 6;
+}
+
 message PBCricutDeviceSerialized {
   string deviceType = 5;
   int32 port = 8;
@@ -139,10 +160,12 @@ message PBCommonBridge {
   PBBridgeSelectedTools toolInfo = 14;
   PBUserSettings authData = 17;
   string logId = 69;
+  repeated PBLog logs = 36;
   PBMatPathData matPathData = 22;
   PBAnalyticMachineSummary deviceAnalyticMachineSummary = 79;
   PBMaterialSelected materialSelectedPayload = 111;
   PBAccessoryV2 accessoryV2 = 127;
+  PBLogLevel logLevel = 137;
 }
 
 message PBAccessoryV2 {

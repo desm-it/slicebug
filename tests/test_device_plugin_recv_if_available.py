@@ -14,6 +14,8 @@ from slicebug.cricut.protobufs.Bridge_pb2 import (
     PBCommonBridge,
     PBInteractionHandle,
     PBInteractionStatus,
+    PBLog,
+    PBLogLevel,
 )
 from slicebug.exceptions import ProtocolError
 
@@ -147,6 +149,68 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
         self.assertEqual(sent[0].status, PBInteractionStatus.riPingReply)
         self.assertTrue(sent[0].HasField("handle"))
         self.assertEqual(sent[0].handle.currentInteraction, 999)
+
+    def test_recv_logs_helper_log_messages_and_keeps_waiting_for_expected_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            debug_log = Path(temp_dir) / "slicebug-debug.log"
+            old_debug_log = os.environ.get("SLICEBUG_DEBUG_LOG")
+            os.environ["SLICEBUG_DEBUG_LOG"] = str(debug_log)
+            try:
+                helper_log = PBCommonBridge(
+                    status=PBInteractionStatus.riLogMessage,
+                    logs=[
+                        PBLog(
+                            title="Bluetooth",
+                            message="Opening device",
+                            level=PBLogLevel.DEBUG_LOGLEVEL,
+                        )
+                    ],
+                ).SerializeToString()
+                start_success = PBCommonBridge(
+                    status=PBInteractionStatus.riStartSuccess
+                ).SerializeToString()
+                payload = (
+                    struct.pack("<i", len(helper_log))
+                    + helper_log
+                    + struct.pack("<i", len(start_success))
+                    + start_success
+                )
+
+                dev = DevicePlugin.__new__(DevicePlugin)
+                setattr(dev, "_path", "CricutDevice.exe")
+                setattr(
+                    dev,
+                    "_process",
+                    type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
+                )
+
+                response = dev.recv(PBInteractionStatus.riStartSuccess)
+
+                self.assertEqual(response.status, PBInteractionStatus.riStartSuccess)
+                entries = [
+                    json.loads(line)
+                    for line in debug_log.read_text(encoding="utf-8").splitlines()
+                ]
+                helper_log_entry = [
+                    entry
+                    for entry in entries
+                    if entry["event"] == "device.recv.log_message"
+                ][0]
+
+                self.assertEqual(helper_log_entry["details"]["log_count"], 1)
+                self.assertEqual(
+                    helper_log_entry["details"]["logs"][0]["fields"]["message"],
+                    "Opening device",
+                )
+                self.assertEqual(
+                    helper_log_entry["details"]["message"]["statusName"],
+                    "riLogMessage",
+                )
+            finally:
+                if old_debug_log is None:
+                    os.environ.pop("SLICEBUG_DEBUG_LOG", None)
+                else:
+                    os.environ["SLICEBUG_DEBUG_LOG"] = old_debug_log
 
     def test_recv_times_out_when_device_only_sends_pings(self):
         with tempfile.TemporaryDirectory() as temp_dir:
