@@ -7,7 +7,7 @@ from slicebug.config.config import Config
 
 
 class ConfigPluginPathTest(unittest.TestCase):
-    def test_windows_prefers_device_common_next(self):
+    def test_windows_prefers_device_common(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             old_plugin = root / "plugins" / "device-common"
@@ -21,22 +21,19 @@ class ConfigPluginPathTest(unittest.TestCase):
             with patch("slicebug.config.config.platform.system", return_value="Windows"):
                 self.assertEqual(
                     config.device_plugin_path(),
-                    str(next_plugin / "CricutDevice.exe"),
+                    str(old_plugin / "CricutDevice.exe"),
                 )
 
-    def test_windows_falls_back_to_device_common(self):
+    def test_windows_ignores_device_common_next_without_device_common(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            old_plugin = root / "plugins" / "device-common"
-            old_plugin.mkdir(parents=True)
-            (old_plugin / "CricutDevice.exe").write_text("old", encoding="utf-8")
+            next_plugin = root / "plugins" / "device-common-next"
+            next_plugin.mkdir(parents=True)
+            (next_plugin / "CricutDevice.exe").write_text("next", encoding="utf-8")
             config = Config(str(root), None, None, None, None)
 
             with patch("slicebug.config.config.platform.system", return_value="Windows"):
-                self.assertEqual(
-                    config.device_plugin_path(),
-                    str(old_plugin / "CricutDevice.exe"),
-                )
+                self.assertIsNone(config.device_plugin_path())
 
     def test_macos_uses_device_common(self):
         with tempfile.TemporaryDirectory() as temp_dir:

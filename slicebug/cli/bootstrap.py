@@ -231,10 +231,7 @@ def import_plugins(cds_root, config):
 
 
 def _device_plugin_imports(plugin_dir):
-    if platform.system() == "Windows":
-        device_candidates = ["device-common-next", "device-common"]
-    else:
-        device_candidates = ["device-common"]
+    device_candidates = ["device-common"]
 
     checked = []
     for source_plugin in device_candidates:
@@ -247,11 +244,7 @@ def _device_plugin_imports(plugin_dir):
             }
         )
         if os.path.isdir(source):
-            imports = [(source_plugin, source_plugin)]
-            device_io_source = os.path.join(plugin_dir, "cricut-device-io")
-            if platform.system() == "Windows" and os.path.isdir(device_io_source):
-                imports.append(("cricut-device-io", "cricut-device-io"))
-            return imports
+            return [(source_plugin, source_plugin)]
 
     log_debug(
         "bootstrap.plugin_source_missing",

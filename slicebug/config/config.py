@@ -69,10 +69,7 @@ class Config:
 
     def device_plugin_path(self):
         exe_name = "CricutDevice" + _exe_suffix()
-        if platform.system() == "Windows":
-            plugin_candidates = ["device-common-next", "device-common"]
-        else:
-            plugin_candidates = ["device-common"]
+        plugin_candidates = ["device-common"]
 
         for plugin in plugin_candidates:
             path = os.path.join(self.config_root, "plugins", plugin, exe_name)

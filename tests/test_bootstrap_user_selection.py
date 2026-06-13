@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from slicebug.cli.bootstrap import choose_keys_user, import_plugins, inspect_cds_user
+from slicebug.exceptions import UserError
 
 
 def make_user(root, name, *, has_settings=True, serials=(), mtime=1):
@@ -98,7 +99,7 @@ class BootstrapUserSelectionTest(unittest.TestCase):
             self.assertTrue((destination / "CricutDevice.exe").exists())
             self.assertFalse((destination / "stale.dll").exists())
 
-    def test_import_plugins_prefers_windows_device_common_next_when_available(self):
+    def test_import_plugins_prefers_windows_device_common(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             cds_root = temp_path / "Design Space"
@@ -128,15 +129,38 @@ class BootstrapUserSelectionTest(unittest.TestCase):
             old_destination = config_root / "plugins" / "device-common"
             next_destination = config_root / "plugins" / "device-common-next"
             io_destination = config_root / "plugins" / "cricut-device-io"
-            self.assertFalse(old_destination.exists())
+            # Windows now mirrors macOS / Design Space default: use device-common,
+            # and do not copy the unused cricut-device-io sibling.
             self.assertEqual(
-                (next_destination / "CricutDevice.exe").read_text(encoding="utf-8"),
-                "next",
+                (old_destination / "CricutDevice.exe").read_text(encoding="utf-8"),
+                "old",
             )
-            self.assertEqual(
-                (io_destination / "CricutDeviceIO.exe").read_text(encoding="utf-8"),
-                "io",
-            )
+            self.assertFalse(next_destination.exists())
+            self.assertFalse(io_destination.exists())
+
+    def test_import_plugins_ignores_windows_device_common_next_without_device_common(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            cds_root = temp_path / "Design Space"
+            plugin_root = cds_root / "resources" / "plugins"
+            next_source = plugin_root / "device-common-next"
+            next_source.mkdir(parents=True)
+            (next_source / "CricutDevice.exe").write_text("next", encoding="utf-8")
+
+            config_root = temp_path / ".slicebug"
+            config = type(
+                "Config",
+                (),
+                {"plugin_root": lambda _self: str(config_root / "plugins")},
+            )()
+
+            with patch(
+                "slicebug.cli.bootstrap.platform.system", return_value="Windows"
+            ):
+                with self.assertRaises(UserError):
+                    import_plugins(str(cds_root), config)
+
+            self.assertFalse((config_root / "plugins" / "device-common-next").exists())
 
     def test_import_plugins_keeps_macos_on_device_common(self):
         with tempfile.TemporaryDirectory() as temp_dir:
