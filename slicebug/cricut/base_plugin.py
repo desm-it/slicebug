@@ -1,10 +1,23 @@
 import hashlib
+import queue
 import struct
 import subprocess
 import threading
 from pathlib import Path
 
 from slicebug.debug import log_debug
+
+
+class _PluginClosed:
+    """Sentinel enqueued by the reader thread when stdout reaches EOF or errors.
+
+    It carries the exception that ended the stream so recv_bytes() can re-raise
+    it (preserving the original EOFError message) and is left in the queue so
+    every later read also observes the closed stream.
+    """
+
+    def __init__(self, error):
+        self.error = error
 
 
 class BasePlugin:
@@ -28,6 +41,7 @@ class BasePlugin:
             daemon=True,
         )
         self._stderr_thread.start()
+        self._start_reader()
 
     def __enter__(self):
         return self
@@ -134,7 +148,38 @@ class BasePlugin:
             bytes_read += len(chunk)
         return b"".join(chunks)
 
-    def recv_bytes(self):
+    def _start_reader(self):
+        # select.select() can only poll sockets on Windows, never the child's
+        # stdout pipe handle, so polling the fd directly is not portable. Instead
+        # a dedicated thread drains stdout into an in-memory queue: blocking reads
+        # become queue.get() and recv_bytes_if_available() becomes a non-blocking
+        # queue.get(). Eagerly draining stdout also keeps the native helper from
+        # stalling on a full stdout pipe buffer while we are busy elsewhere.
+        self._recv_queue = queue.Queue()
+        self._reader_thread = threading.Thread(
+            target=self._read_frames,
+            name="slicebug-plugin-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
+
+    def _read_frames(self):
+        try:
+            while True:
+                self._recv_queue.put(self._read_frame())
+        except EOFError as error:
+            self._recv_queue.put(_PluginClosed(error))
+        except Exception as error:  # defensive: surface unexpected reader failures
+            log_debug(
+                "plugin.reader_error",
+                path=getattr(self, "_path", None),
+                error=f"{type(error).__name__}: {error}",
+            )
+            self._recv_queue.put(_PluginClosed(error))
+
+    def _read_frame(self):
+        # Runs only on the reader thread, the sole consumer of stdout. The frame
+        # is a little-endian int32 length prefix followed by the body.
         message_len_encoded = self._read_exactly(4)
         (message_len,) = struct.unpack("<i", message_len_encoded)
         log_debug(
@@ -143,3 +188,25 @@ class BasePlugin:
             byte_count=message_len,
         )
         return self._read_exactly(message_len)
+
+    def recv_bytes(self):
+        return self._take_frame(self._recv_queue.get())
+
+    def recv_bytes_if_available(self, timeout=0):
+        try:
+            if timeout and timeout > 0:
+                item = self._recv_queue.get(timeout=timeout)
+            else:
+                item = self._recv_queue.get_nowait()
+        except queue.Empty:
+            return None
+        return self._take_frame(item)
+
+    def _take_frame(self, item):
+        if not isinstance(item, _PluginClosed):
+            return item
+        # Leave the sentinel in the queue so subsequent reads also see EOF.
+        self._recv_queue.put(item)
+        if isinstance(item.error, EOFError):
+            raise item.error
+        raise EOFError("Plugin stdout closed") from item.error
