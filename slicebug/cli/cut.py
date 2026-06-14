@@ -5,6 +5,7 @@ import platform
 
 from slicebug.cricut.device_plugin import DevicePlugin
 from slicebug.cricut.material_settings import MaterialSettings
+from slicebug.cricut.windows_helper_patch import prepare_windows_device_plugin
 from slicebug.cricut.protobufs.NativeModel_pb2 import (
     PBAnalyticMachineSummary,
     PBSize,
@@ -495,6 +496,10 @@ def cut_inner(config, dev, plan, software_buttons=False):
 
 def cut(args, config):
     device_plugin_path = resolve_device_plugin_path(args, config)
+    device_plugin_path = prepare_windows_device_plugin(
+        device_plugin_path,
+        config.plugin_root(),
+    )
 
     plan = Plan.from_json(json.load(args.plan))
 
