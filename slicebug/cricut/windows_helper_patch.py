@@ -49,10 +49,12 @@ def prepare_windows_device_plugin(source_path, plugin_root, known_hashes=None):
     if source_md5 not in supported_hashes:
         raise UserError(
             f"Unsupported CricutDevice.exe version: md5 {source_md5}.",
-            "SliceBug can only apply the Windows helper gate patch to known "
-            "helper builds. Run `slicebug bootstrap` after updating Design "
-            "Space, or set SLICEBUG_DISABLE_WINDOWS_HELPER_PATCH=1 to try the "
-            "unpatched helper.",
+            "The Windows helper gate patch only targets known CricutDevice.exe "
+            "builds, and this Design Space build is not one of them. Re-running "
+            "bootstrap re-imports the same build and will not help; update to a "
+            "SliceBug release that supports this helper build, or set "
+            "SLICEBUG_DISABLE_WINDOWS_HELPER_PATCH=1 to run the helper unpatched "
+            "(the bridge flow may then be rejected).",
         )
 
     cache_dir = Path(plugin_root).resolve() / PATCHED_PLUGIN_NAME
@@ -102,28 +104,47 @@ def _cached_copy_is_valid(patched_exe, metadata_path, expected_metadata):
 
 def _rebuild_cache(source, cache_dir, metadata):
     tmp_dir = cache_dir.with_name(cache_dir.name + ".tmp")
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
-    tmp_dir.mkdir(parents=True)
+    try:
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True)
 
-    source_dir = source.parent
-    for item in source_dir.iterdir():
-        if item.name.lower() == "logs":
-            continue
-        target = tmp_dir / item.name
-        if item.is_dir():
-            shutil.copytree(item, target, ignore=shutil.ignore_patterns("*.log"))
-        elif item.is_file():
-            shutil.copy2(item, target)
-    (tmp_dir / "logs").mkdir(exist_ok=True)
-    (tmp_dir / PATCH_METADATA_NAME).write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+        source_dir = source.parent
+        for item in source_dir.iterdir():
+            if item.name.lower() == "logs":
+                continue
+            target = tmp_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, ignore=shutil.ignore_patterns("*.log"))
+            elif item.is_file():
+                shutil.copy2(item, target)
+        (tmp_dir / "logs").mkdir(exist_ok=True)
+        (tmp_dir / PATCH_METADATA_NAME).write_text(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-    tmp_dir.rename(cache_dir)
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+        tmp_dir.rename(cache_dir)
+    except OSError as error:
+        # On Windows the cached CricutDevice.exe is often still locked by a
+        # running helper, or antivirus has quarantined it, which surfaces as a
+        # bare PermissionError from rmtree/rename. Turn that into actionable
+        # guidance instead of a traceback.
+        log_debug(
+            "device_plugin.patch.cache_rebuild_failed",
+            cache_dir=str(cache_dir),
+            error=f"{type(error).__name__}: {error}",
+        )
+        raise UserError(
+            f"Could not build the patched Windows helper cache at {cache_dir}: "
+            f"{error}.",
+            "Close any running Cricut helper or Design Space so the cached "
+            "CricutDevice.exe is not locked, check that antivirus has not "
+            "quarantined the copy, then try again. You can also set "
+            "SLICEBUG_DISABLE_WINDOWS_HELPER_PATCH=1 to skip patching.",
+        ) from error
 
 
 def _patch_helper(path):
