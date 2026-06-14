@@ -126,6 +126,96 @@ class WindowsHelperPatchTest(unittest.TestCase):
             self.assertEqual(prepared, str(source))
             self.assertEqual(read_gate_bytes(source), PATCH_ORIGINAL_BYTES)
 
+    def test_windows_second_call_reuses_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = Path(temp_dir) / "plugins"
+            source = plugin_root / "device-common" / "CricutDevice.exe"
+            write_helper(source)
+            known = {windows_helper_patch._file_md5(source)}
+
+            with patch(
+                "slicebug.cricut.windows_helper_patch.platform.system",
+                return_value="Windows",
+            ):
+                first = prepare_windows_device_plugin(
+                    str(source), str(plugin_root), known_hashes=known
+                )
+                with patch(
+                    "slicebug.cricut.windows_helper_patch._rebuild_cache"
+                ) as rebuild:
+                    second = prepare_windows_device_plugin(
+                        str(source), str(plugin_root), known_hashes=known
+                    )
+
+            self.assertEqual(first, second)
+            rebuild.assert_not_called()
+            self.assertEqual(read_gate_bytes(Path(second)), PATCHED_BYTES)
+
+    def test_windows_stale_cache_metadata_triggers_rebuild(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = Path(temp_dir) / "plugins"
+            source = plugin_root / "device-common" / "CricutDevice.exe"
+            write_helper(source)
+            known = {windows_helper_patch._file_md5(source)}
+
+            with patch(
+                "slicebug.cricut.windows_helper_patch.platform.system",
+                return_value="Windows",
+            ):
+                prepared = prepare_windows_device_plugin(
+                    str(source), str(plugin_root), known_hashes=known
+                )
+                metadata_path = (
+                    Path(prepared).parent / windows_helper_patch.PATCH_METADATA_NAME
+                )
+                # Corrupt the cache metadata so the next call must rebuild.
+                metadata_path.write_text('{"patchVersion": "stale"}', encoding="utf-8")
+
+                with patch(
+                    "slicebug.cricut.windows_helper_patch._rebuild_cache",
+                    wraps=windows_helper_patch._rebuild_cache,
+                ) as rebuild:
+                    prepared_again = prepare_windows_device_plugin(
+                        str(source), str(plugin_root), known_hashes=known
+                    )
+
+            rebuild.assert_called_once()
+            self.assertEqual(prepared_again, prepared)
+            self.assertEqual(read_gate_bytes(Path(prepared_again)), PATCHED_BYTES)
+
+    def test_windows_already_patched_source_is_used_directly(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            plugin_root = Path(temp_dir) / "plugins"
+            source = plugin_root / "device-common" / "CricutDevice.exe"
+            write_helper(source, gate_bytes=PATCHED_BYTES)
+
+            with patch(
+                "slicebug.cricut.windows_helper_patch.platform.system",
+                return_value="Windows",
+            ):
+                # An already-patched source short-circuits before the hash check,
+                # so even a bogus allow-list is never consulted.
+                with patch(
+                    "slicebug.cricut.windows_helper_patch._rebuild_cache"
+                ) as rebuild:
+                    prepared = prepare_windows_device_plugin(
+                        str(source), str(plugin_root), known_hashes={"unused"}
+                    )
+
+            self.assertEqual(prepared, str(source))
+            rebuild.assert_not_called()
+
+    def test_patch_helper_rejects_unexpected_gate_bytes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            helper = Path(temp_dir) / "CricutDevice.exe"
+            write_helper(helper, gate_bytes=b"\xde\xad\xbe\xef\x90")
+
+            with self.assertRaises(UserError):
+                windows_helper_patch._patch_helper(helper)
+
+            # The helper must be left untouched when the bytes are unexpected.
+            self.assertEqual(read_gate_bytes(helper), b"\xde\xad\xbe\xef\x90")
+
 
 if __name__ == "__main__":
     unittest.main()
