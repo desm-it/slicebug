@@ -4,7 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from slicebug.cli.cut import make_start_message, resolve_device_plugin_path
+from slicebug.cli.cut import (
+    make_start_message,
+    prepare_device_plugin_for_cut,
+    resolve_device_plugin_path,
+)
 from slicebug.cricut.protobufs.Bridge_pb2 import PBInteractionStatus, PBLogLevel
 from slicebug.exceptions import UserError
 
@@ -60,6 +64,37 @@ class CutStartMessageTest(unittest.TestCase):
         config = SimpleNamespace(device_plugin_path=lambda: "configured")
 
         self.assertEqual(resolve_device_plugin_path(args, config), "configured")
+
+    def test_prepare_device_plugin_for_cut_prefers_windows_proxy(self):
+        config = SimpleNamespace(plugin_root=lambda: "plugin-root")
+
+        with patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_proxy",
+            return_value="proxy-path",
+        ) as proxy, patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_patch"
+        ) as patcher:
+            prepared = prepare_device_plugin_for_cut("source-path", config)
+
+        self.assertEqual(prepared, "proxy-path")
+        proxy.assert_called_once_with("source-path", "plugin-root")
+        patcher.assert_not_called()
+
+    def test_prepare_device_plugin_for_cut_uses_patch_fallback(self):
+        config = SimpleNamespace(plugin_root=lambda: "plugin-root")
+
+        with patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_proxy",
+            return_value=None,
+        ) as proxy, patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_patch",
+            return_value="patched-path",
+        ) as patcher:
+            prepared = prepare_device_plugin_for_cut("source-path", config)
+
+        self.assertEqual(prepared, "patched-path")
+        proxy.assert_called_once_with("source-path", "plugin-root")
+        patcher.assert_called_once_with("source-path", "plugin-root")
 
 
 if __name__ == "__main__":
