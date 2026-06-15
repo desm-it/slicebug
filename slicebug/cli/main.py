@@ -10,7 +10,12 @@ from slicebug.cli.list_materials import list_materials_register_args
 from slicebug.cli.list_tools import list_tools_register_args
 from slicebug.cli.plan import plan_register_args
 from slicebug.config.config import Config
-from slicebug.debug import debug_log_path, log_debug, log_exception
+from slicebug.debug import (
+    debug_log_path,
+    enable_debug_logging,
+    log_debug,
+    log_exception,
+)
 from slicebug.exceptions import UserError
 from slicebug.version import VERSION
 
@@ -37,6 +42,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("--profile", help="pick a machine profile to use")
+    parser.add_argument(
+        "--log",
+        action="store_true",
+        help="write a SliceBug debug log; off by default",
+    )
 
     subparsers = parser.add_subparsers()
 
@@ -47,6 +57,9 @@ def main():
     cut_register_args(subparsers)
 
     args = parser.parse_args()
+    if args.log:
+        enable_debug_logging()
+
     log_debug(
         "cli.start",
         argv=sys.argv[1:],
