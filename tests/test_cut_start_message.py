@@ -4,7 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from slicebug.cli.cut import make_start_message, resolve_device_plugin_path
+from slicebug.cli.cut import (
+    make_start_message,
+    prepare_device_plugin_for_cut,
+    resolve_device_plugin_path,
+)
 from slicebug.cricut.protobufs.Bridge_pb2 import PBInteractionStatus, PBLogLevel
 from slicebug.exceptions import UserError
 
@@ -60,6 +64,69 @@ class CutStartMessageTest(unittest.TestCase):
         config = SimpleNamespace(device_plugin_path=lambda: "configured")
 
         self.assertEqual(resolve_device_plugin_path(args, config), "configured")
+
+    def test_prepare_device_plugin_for_cut_prefers_windows_proxy(self):
+        config = SimpleNamespace(plugin_root=lambda: "plugin-root")
+
+        with patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_proxy",
+            return_value="proxy-path",
+        ) as proxy, patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_patch"
+        ) as patcher, patch(
+            "slicebug.cli.cut.platform.system",
+            return_value="Windows",
+        ), patch(
+            "builtins.print"
+        ) as print_fn:
+            prepared = prepare_device_plugin_for_cut("source-path", config)
+
+        self.assertEqual(prepared, "proxy-path")
+        proxy.assert_called_once_with("source-path", "plugin-root")
+        patcher.assert_not_called()
+        print_fn.assert_called_once_with("Windows helper mode: proxy (proxy-path)")
+
+    def test_prepare_device_plugin_for_cut_uses_patch_fallback(self):
+        config = SimpleNamespace(plugin_root=lambda: "plugin-root")
+
+        with patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_proxy",
+            return_value=None,
+        ) as proxy, patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_patch",
+            return_value="patched-path",
+        ) as patcher, patch(
+            "slicebug.cli.cut.platform.system",
+            return_value="Windows",
+        ), patch(
+            "builtins.print"
+        ) as print_fn:
+            prepared = prepare_device_plugin_for_cut("source-path", config)
+
+        self.assertEqual(prepared, "patched-path")
+        proxy.assert_called_once_with("source-path", "plugin-root")
+        patcher.assert_called_once_with("source-path", "plugin-root")
+        print_fn.assert_called_once_with("Windows helper mode: patch (patched-path)")
+
+    def test_prepare_device_plugin_for_cut_logs_original_fallback(self):
+        config = SimpleNamespace(plugin_root=lambda: "plugin-root")
+
+        with patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_proxy",
+            return_value=None,
+        ), patch(
+            "slicebug.cli.cut.prepare_windows_device_plugin_patch",
+            return_value="source-path",
+        ), patch(
+            "slicebug.cli.cut.platform.system",
+            return_value="Windows",
+        ), patch(
+            "builtins.print"
+        ) as print_fn:
+            prepared = prepare_device_plugin_for_cut("source-path", config)
+
+        self.assertEqual(prepared, "source-path")
+        print_fn.assert_called_once_with("Windows helper mode: original (source-path)")
 
 
 if __name__ == "__main__":

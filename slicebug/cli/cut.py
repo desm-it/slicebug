@@ -2,10 +2,14 @@ import argparse
 import json
 import os.path
 import platform
+from pathlib import Path
 
 from slicebug.cricut.device_plugin import DevicePlugin
 from slicebug.cricut.material_settings import MaterialSettings
-from slicebug.cricut.windows_helper_patch import prepare_windows_device_plugin
+from slicebug.cricut.windows_helper_patch import (
+    prepare_windows_device_plugin as prepare_windows_device_plugin_patch,
+)
+from slicebug.cricut.windows_helper_proxy import prepare_windows_device_plugin_proxy
 from slicebug.cricut.protobufs.NativeModel_pb2 import (
     PBAnalyticMachineSummary,
     PBSize,
@@ -494,12 +498,40 @@ def cut_inner(config, dev, plan, software_buttons=False):
     # status: riCloseInteractionSuccess
 
 
-def cut(args, config):
-    device_plugin_path = resolve_device_plugin_path(args, config)
-    device_plugin_path = prepare_windows_device_plugin(
+def prepare_device_plugin_for_cut(device_plugin_path, config):
+    proxy_path = prepare_windows_device_plugin_proxy(
         device_plugin_path,
         config.plugin_root(),
     )
+    if proxy_path is not None:
+        _log_device_plugin_mode("proxy", proxy_path)
+        return proxy_path
+
+    prepared_path = prepare_windows_device_plugin_patch(
+        device_plugin_path,
+        config.plugin_root(),
+    )
+    _log_device_plugin_mode(_fallback_helper_mode(device_plugin_path, prepared_path), prepared_path)
+    return prepared_path
+
+
+def _fallback_helper_mode(source_path, prepared_path):
+    if platform.system() != "Windows":
+        return "native"
+    if Path(prepared_path).resolve() != Path(source_path).resolve():
+        return "patch"
+    return "original"
+
+
+def _log_device_plugin_mode(mode, path):
+    log_debug("cut.device_plugin_mode", mode=mode, path=path)
+    if platform.system() == "Windows":
+        print(f"Windows helper mode: {mode} ({path})")
+
+
+def cut(args, config):
+    device_plugin_path = resolve_device_plugin_path(args, config)
+    device_plugin_path = prepare_device_plugin_for_cut(device_plugin_path, config)
 
     plan = Plan.from_json(json.load(args.plan))
 

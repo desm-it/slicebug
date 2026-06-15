@@ -24,6 +24,10 @@ _REDACTED_KEYS = {
 }
 
 
+def enable_debug_logging():
+    os.environ["SLICEBUG_DEBUG"] = "1"
+
+
 def _default_debug_path():
     if os.environ.get("SLICEBUG_DEBUG") not in {"1", "true", "TRUE", "yes", "YES"}:
         return None

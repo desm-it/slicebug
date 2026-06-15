@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from slicebug.config.keys import Keys
 from slicebug.config.machine_profile import MachineProfile, MachineProfiles
+from slicebug.cricut.windows_helper_proxy import prepare_windows_device_plugin_proxy
 from slicebug.debug import log_debug
 from slicebug.exceptions import UserError
 
@@ -392,6 +393,14 @@ def bootstrap(args, config):
     keys_user = choose_keys_user(args.design_space_profile_path, cds_users)
 
     import_plugins(args.design_space_path, config)
+    if platform.system() == "Windows":
+        proxy_path = prepare_windows_device_plugin_proxy(
+            config.device_plugin_path(),
+            config.plugin_root(),
+        )
+        if proxy_path is not None:
+            print("Windows helper proxy prepared.")
+            print()
     import_keys(
         args.design_space_path, args.design_space_profile_path, keys_user, config
     )
