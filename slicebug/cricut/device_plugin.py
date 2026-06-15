@@ -1,6 +1,5 @@
 import hashlib
 import os
-import select
 import time
 from pathlib import Path
 
@@ -35,8 +34,7 @@ class DevicePlugin(BasePlugin):
         log_debug("device.send", message=describe_protobuf(message))
         self.send_bytes(self._encrypt_request(message))
 
-    def _recv(self):
-        message_bytes = self.recv_bytes()
+    def _decode(self, message_bytes):
         message = PBCommonBridge.FromString(message_bytes)
         log_debug(
             "device.recv",
@@ -45,8 +43,19 @@ class DevicePlugin(BasePlugin):
         )
         return message
 
+    def _recv(self):
+        return self._decode(self.recv_bytes())
+
+    def _recv_if_available(self, timeout):
+        message_bytes = self.recv_bytes_if_available(timeout)
+        if message_bytes is None:
+            return None
+        return self._decode(message_bytes)
+
     def recv(self, expect=None, ping_timeout=None):
-        message = self._recv()
+        return self._await_status(self._recv(), expect, ping_timeout)
+
+    def _await_status(self, message, expect=None, ping_timeout=None):
         ping_started_at = None
         ping_count = 0
 
@@ -185,9 +194,12 @@ class DevicePlugin(BasePlugin):
         return details
 
     def recv_if_available(self, timeout=0):
-        if self._process.stdout is None:
+        # Portable replacement for the old select.select() poll, which only works
+        # on sockets on Windows. The background reader thread frames messages onto
+        # a queue; we poll that queue for up to `timeout` seconds. If a frame is
+        # waiting we hand it to the normal ping/log handling (which then blocks for
+        # any follow-up frames it needs, exactly as a plain recv() would).
+        message = self._recv_if_available(timeout)
+        if message is None:
             return None
-        ready, _, _ = select.select([self._process.stdout], [], [], timeout)
-        if not ready:
-            return None
-        return self.recv()
+        return self._await_status(message)

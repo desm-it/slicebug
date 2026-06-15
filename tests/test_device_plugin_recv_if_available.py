@@ -2,7 +2,6 @@ import json
 import os
 import struct
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +61,8 @@ class BasePluginRecvBytesTest(unittest.TestCase):
             plugin_path.parent.mkdir()
             process = MagicMock()
             process.stderr.readline.return_value = b""
+            # Stop the background reader thread immediately on an empty stdout.
+            process.stdout.read.return_value = b""
 
             with patch(
                 "slicebug.cricut.base_plugin.subprocess.Popen", return_value=process
@@ -82,6 +83,8 @@ class BasePluginRecvBytesTest(unittest.TestCase):
             plugin_path.parent.mkdir()
             process = MagicMock()
             process.stderr.readline.return_value = b""
+            # Stop the background reader thread immediately on an empty stdout.
+            process.stdout.read.return_value = b""
 
             with patch(
                 "slicebug.cricut.base_plugin.subprocess.Popen", return_value=process
@@ -100,6 +103,7 @@ class BasePluginRecvBytesTest(unittest.TestCase):
             "_process",
             type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
         )
+        plugin._start_reader()
 
         self.assertEqual(plugin.recv_bytes(), message)
 
@@ -125,38 +129,50 @@ class BasePluginRecvBytesTest(unittest.TestCase):
 
 
 class DevicePluginRecvIfAvailableTest(unittest.TestCase):
-    def test_recv_if_available_sees_message_already_buffered_by_prior_read(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            writer = Path(temp_dir) / "writer.py"
-            writer.write_text(
-                f"#!{sys.executable}\n"
-                "import struct, sys\n"
-                "from slicebug.cricut.protobufs.Bridge_pb2 import PBCommonBridge, PBInteractionStatus\n"
-                "messages = [\n"
-                "    PBCommonBridge(status=PBInteractionStatus.riMatLoaded).SerializeToString(),\n"
-                "    PBCommonBridge(status=PBInteractionStatus.riWaitClear).SerializeToString(),\n"
-                "]\n"
-                "for message in messages:\n"
-                "    sys.stdout.buffer.write(struct.pack('<i', len(message)))\n"
-                "    sys.stdout.buffer.write(message)\n"
-                "sys.stdout.buffer.flush()\n"
-            )
-            writer.chmod(0o755)
+    def test_recv_if_available_returns_a_message_already_sent_over_the_pipe(self):
+        # Two framed messages the helper sends back to back over a real OS pipe
+        # (unbuffered, like the bufsize=0 stdout in production). A real pipe is
+        # what the old select.select() poll could not handle on Windows.
+        mat_loaded = PBCommonBridge(
+            status=PBInteractionStatus.riMatLoaded
+        ).SerializeToString()
+        wait_clear = PBCommonBridge(
+            status=PBInteractionStatus.riWaitClear
+        ).SerializeToString()
+        payload = (
+            struct.pack("<i", len(mat_loaded))
+            + mat_loaded
+            + struct.pack("<i", len(wait_clear))
+            + wait_clear
+        )
 
-            dev = DevicePlugin(str(writer), b"0" * 16)
+        read_fd, write_fd = os.pipe()
+        dev = DevicePlugin.__new__(DevicePlugin)
+        setattr(dev, "_path", "CricutDevice.exe")
+        setattr(
+            dev,
+            "_process",
+            type("Process", (), {"stdout": os.fdopen(read_fd, "rb", buffering=0)})(),
+        )
+        try:
+            dev._start_reader()
+            # Send both frames, then close the write end so the reader hits EOF.
+            with os.fdopen(write_fd, "wb", buffering=0) as writer:
+                writer.write(payload)
 
-            try:
-                self.assertEqual(dev.recv().status, PBInteractionStatus.riMatLoaded)
+            # Wait for the reader thread to drain the pipe into the queue so the
+            # non-blocking poll below is deterministic regardless of thread
+            # timing: recv_if_available must surface the second message the
+            # helper already sent, which select.select() could not do portably
+            # on Windows pipe handles.
+            dev._reader_thread.join(timeout=5)
 
-                # The child wrote both messages at once. BufferedReader may have
-                # pulled the second message into Python's internal buffer while
-                # reading the first one; recv_if_available still needs to see it
-                # instead of consulting only the OS fd.
-                next_message = dev.recv_if_available(timeout=0)
-                self.assertIsNotNone(next_message)
-                self.assertEqual(next_message.status, PBInteractionStatus.riWaitClear)
-            finally:
-                dev.close()
+            self.assertEqual(dev.recv().status, PBInteractionStatus.riMatLoaded)
+            next_message = dev.recv_if_available(timeout=0)
+            self.assertIsNotNone(next_message)
+            self.assertEqual(next_message.status, PBInteractionStatus.riWaitClear)
+        finally:
+            dev._process.stdout.close()
 
     def test_recv_answers_ping_handle_and_keeps_waiting_for_expected_status(self):
         ping = PBCommonBridge(
@@ -181,6 +197,7 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
             type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
         )
         setattr(dev, "send", lambda message: sent.append(message))
+        dev._start_reader()
 
         response = dev.recv(PBInteractionStatus.riStartSuccess)
 
@@ -223,6 +240,7 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
                     "_process",
                     type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
                 )
+                dev._start_reader()
 
                 response = dev.recv(PBInteractionStatus.riStartSuccess)
 
@@ -284,6 +302,7 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
                     type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
                 )
                 setattr(dev, "send", lambda message: sent.append(message))
+                dev._start_reader()
 
                 with patch(
                     "slicebug.cricut.device_plugin.time.monotonic",
@@ -337,6 +356,7 @@ class DevicePluginRecvIfAvailableTest(unittest.TestCase):
                     "_process",
                     type("Process", (), {"stdout": ShortReadStdout(payload, 4)})(),
                 )
+                dev._start_reader()
 
                 with self.assertRaisesRegex(ProtocolError, "expected 2, got 0"):
                     dev.recv(PBInteractionStatus.riStartSuccess)
