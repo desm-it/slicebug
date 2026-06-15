@@ -5,22 +5,33 @@ slicebug interacts with cutters by reusing undocumented components of Cricut Des
 
 # Requirements
 - Windows or macOS
-- Cricut Design Space installed and used at least once
+- Cricut Design Space installed, signed in, and used for at least one cut with the machine you want to use
+- Your cutter connected, awake, and not connected to another computer when running `slicebug cut`
 - On macOS: ensure only one Cricut device is paired (remove any Bluetooth-paired devices from System Settings > Bluetooth if you're connecting via USB)
 
 slicebug is developed in Python 3.10. You don't need Python to run it, just download a compiled version by clicking the "Releases" section on the right.
 
-## Running from source (macOS)
+## Tested machines
 
-On macOS, you can run slicebug directly from source using Python:
+- Original Cricut Maker
+- Cricut Joy
 
-```bash
-# Create a virtual environment (using uv or standard venv)
-uv venv
+## Running from source
+
+You can run slicebug directly from source on macOS or Windows using Python:
+
+```
+# Create a virtual environment
+python -m venv .venv
+
+# Activate it on macOS
 source .venv/bin/activate
 
+# Or activate it on Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
 # Install dependencies
-uv pip install cryptography protobuf
+pip install cryptography protobuf
 
 # Bootstrap slicebug (copies required data from Cricut Design Space)
 python -m slicebug bootstrap
@@ -29,7 +40,7 @@ python -m slicebug bootstrap
 python -m slicebug list-materials
 
 # Execute a cut plan
-python -m slicebug cut examples/star.json
+python -m slicebug cut examples/blobs.json
 ```
 
 # Usage example
@@ -50,6 +61,12 @@ PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe bootstrap
 Importing plugins from C:\Users\Bill\AppData\Local\Program\Cricut Design Space.
 ...
 Machines imported.
+```
+
+If bootstrap finds multiple saved machine profiles, it asks you to name them. Later commands can select one by putting `--profile name` before the command:
+
+```
+PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe --profile joy list-materials
 ```
 
 Take a quick look at the output and make sure there aren't any errors. If everything went well, try using the `list-materials` and `list-tools` commands:
@@ -111,13 +128,32 @@ Insert mat and press the Load/Unload button.
 ...
 ```
 
+For buttonless machines such as Cricut Joy, use software button prompts:
+
+```
+PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe cut --software-buttons blobs_plan.json
+```
+
 Just follow the instructions and your cut should complete!
+
+If startup times out or slicebug says the helper is busy, close Cricut Design Space, make sure the cutter is awake, and try again.
+
+# Debug logging
+
+Debug logging is off by default. To write a debug log for troubleshooting, put `--log` before the command:
+
+```
+PS C:\Users\Bill\Downloads\slicebug> .\slicebug.exe --log cut blobs_plan.json
+```
+
+Release builds write `slicebug-debug.log` next to `slicebug.exe` by default. When running from source, the default path is next to the Python executable. Set `SLICEBUG_DEBUG_LOG` to choose a different path.
 
 # Things that don't work yet
 
-- Testing/support for anything other than the original Cricut Maker
-  - Basic cutting will likely work on other machines supported by Cricut Design Space---please try it and report back!
-  - Features specific to other machines, like Smart Materials, are not supported yet.
+- Machine coverage is still limited
+  - Basic cutting has been tested on the Original Cricut Maker and Cricut Joy.
+  - Buttonless machines can use `--software-buttons`.
+  - Smart Materials and other machine-specific workflows are not supported yet.
 - Operating systems other than Windows and macOS
   - Linux:
   	- CricutDevice.exe does not run under Wine, but perhaps it does under one of the forks?
