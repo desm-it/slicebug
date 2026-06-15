@@ -2,6 +2,7 @@ import argparse
 import json
 import os.path
 import platform
+from pathlib import Path
 
 from slicebug.cricut.device_plugin import DevicePlugin
 from slicebug.cricut.material_settings import MaterialSettings
@@ -498,10 +499,34 @@ def cut_inner(config, dev, plan, software_buttons=False):
 
 
 def prepare_device_plugin_for_cut(device_plugin_path, config):
-    return (
-        prepare_windows_device_plugin_proxy(device_plugin_path, config.plugin_root())
-        or prepare_windows_device_plugin_patch(device_plugin_path, config.plugin_root())
+    proxy_path = prepare_windows_device_plugin_proxy(
+        device_plugin_path,
+        config.plugin_root(),
     )
+    if proxy_path is not None:
+        _log_device_plugin_mode("proxy", proxy_path)
+        return proxy_path
+
+    prepared_path = prepare_windows_device_plugin_patch(
+        device_plugin_path,
+        config.plugin_root(),
+    )
+    _log_device_plugin_mode(_fallback_helper_mode(device_plugin_path, prepared_path), prepared_path)
+    return prepared_path
+
+
+def _fallback_helper_mode(source_path, prepared_path):
+    if platform.system() != "Windows":
+        return "native"
+    if Path(prepared_path).resolve() != Path(source_path).resolve():
+        return "patch"
+    return "original"
+
+
+def _log_device_plugin_mode(mode, path):
+    log_debug("cut.device_plugin_mode", mode=mode, path=path)
+    if platform.system() == "Windows":
+        print(f"Windows helper mode: {mode} ({path})")
 
 
 def cut(args, config):
