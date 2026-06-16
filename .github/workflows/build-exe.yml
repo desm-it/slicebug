@@ -7,6 +7,10 @@ on:
         description: Existing GitHub release tag to attach builds to; leave blank for smoke artifacts only
         required: false
         default: ""
+      build_ref:
+        description: SliceBug git ref to build for manual runs
+        required: false
+        default: main
   release:
     types:
       - published
@@ -16,6 +20,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUILD_REF: ${{ github.event.release.tag_name || inputs.build_ref || github.ref }}
   RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
 
 jobs:
@@ -26,7 +31,7 @@ jobs:
       - name: Check out SliceBug
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -58,7 +63,7 @@ jobs:
       - name: Check out SliceBug
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Set up Python
         uses: actions/setup-python@v5

@@ -1,5 +1,5 @@
-from cx_Freeze import Executable
-from setuptools import find_namespace_packages, setup
+from cx_Freeze import Executable, setup
+from setuptools import find_namespace_packages
 
 from slicebug.version import VERSION
 
