@@ -1,47 +1,101 @@
-name: Build Windows executable and release
+name: Release Builds
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to attach builds to; leave blank for smoke artifacts only
+        required: false
+        default: ""
+  release:
+    types:
+      - published
 
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || github.ref_name }}
+
 jobs:
-  build:
-    runs-on: windows-latest
+  mac:
+    name: macOS arm64
+    runs-on: macos-15
     steps:
-      - name: Checkout repository
+      - name: Check out SliceBug
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
 
-      - name: Install Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Build
+      - name: Build mac release
         run: python setup.py build_exe -b slicebug-release
 
-      - name: Zip release
+      - name: Zip mac release
+        shell: bash
+        run: |
+          cd slicebug-release
+          zip -r ../slicebug-macos.zip .
+
+      - name: Upload mac artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slicebug-macos
+          path: slicebug-macos.zip
+
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    steps:
+      - name: Check out SliceBug
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.release_tag || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Build Windows release
+        run: python setup.py build_exe -b slicebug-release
+
+      - name: Zip Windows release
         shell: pwsh
         run: Compress-Archive -Path slicebug-release\* -DestinationPath slicebug-windows.zip -Force
 
-      - name: Upload release asset
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload $env:RELEASE_TAG slicebug-windows.zip --clobber
-
-      - name: Upload workflow artifact
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: slicebug-windows
           path: slicebug-windows.zip
+
+  github-release:
+    name: Attach Release Artifacts
+    needs:
+      - mac
+      - windows
+    if: github.event_name == 'release' || inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Attach artifacts to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: release-artifacts/**/*.zip
