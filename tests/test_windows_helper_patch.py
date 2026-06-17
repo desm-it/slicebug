@@ -202,7 +202,10 @@ class WindowsHelperPatchTest(unittest.TestCase):
                         str(source), str(plugin_root), known_hashes={"unused"}
                     )
 
-            self.assertEqual(prepared, str(source))
+            # The helper path is resolved before the already-patched check, so
+            # compare against the resolved path (matters where TMPDIR is a
+            # symlink, e.g. /var -> /private/var on macOS).
+            self.assertEqual(prepared, str(source.resolve()))
             rebuild.assert_not_called()
 
     def test_patch_helper_rejects_unexpected_gate_bytes(self):

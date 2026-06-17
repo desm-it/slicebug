@@ -13,14 +13,10 @@ def write_file(path, contents):
     path.write_bytes(contents)
 
 
-def make_python_runtime(root):
-    python_root = Path(root) / "python-runtime"
-    python_exe = python_root / "python.exe"
-    write_file(python_exe, b"python")
-    write_file(python_root / "python314.dll", b"python-dll")
-    write_file(python_root / "vcruntime140.dll", b"vc-runtime")
-    (python_root / "Lib" / "encodings").mkdir(parents=True)
-    return python_exe
+def make_stub(root):
+    stub = Path(root) / "bundled" / "electron.exe"
+    write_file(stub, b"stub-exe")
+    return stub
 
 
 class WindowsHelperProxyTest(unittest.TestCase):
@@ -40,7 +36,7 @@ class WindowsHelperProxyTest(unittest.TestCase):
 
             self.assertIsNone(prepared)
 
-    def test_windows_returns_none_without_console_python(self):
+    def test_windows_returns_none_without_bundled_stub(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "plugins" / "device-common" / "CricutDevice.exe"
             write_file(source, b"helper")
@@ -50,12 +46,9 @@ class WindowsHelperProxyTest(unittest.TestCase):
                 return_value="Windows",
             ), patch(
                 "slicebug.cricut.windows_helper_proxy.sys.executable",
-                str(Path(temp_dir) / "slicebug.exe"),
-            ), patch(
-                "slicebug.cricut.windows_helper_proxy.sys._base_executable",
-                str(Path(temp_dir) / "slicebug.exe"),
-                create=True,
-            ):
+                str(Path(temp_dir) / "no-stub" / "slicebug.exe"),
+            ), patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(windows_helper_proxy._STUB_ENV_OVERRIDE, None)
                 prepared = prepare_windows_device_plugin_proxy(
                     str(source),
                     str(Path(temp_dir) / "plugins"),
@@ -67,22 +60,18 @@ class WindowsHelperProxyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "plugins" / "device-common" / "CricutDevice.exe"
             write_file(source, b"helper")
-            old_value = os.environ.get("SLICEBUG_DISABLE_WINDOWS_HELPER_PROXY")
-            os.environ["SLICEBUG_DISABLE_WINDOWS_HELPER_PROXY"] = "1"
-            try:
-                with patch(
-                    "slicebug.cricut.windows_helper_proxy.platform.system",
-                    return_value="Windows",
-                ):
-                    prepared = prepare_windows_device_plugin_proxy(
-                        str(source),
-                        str(Path(temp_dir) / "plugins"),
-                    )
-            finally:
-                if old_value is None:
-                    os.environ.pop("SLICEBUG_DISABLE_WINDOWS_HELPER_PROXY", None)
-                else:
-                    os.environ["SLICEBUG_DISABLE_WINDOWS_HELPER_PROXY"] = old_value
+
+            with patch(
+                "slicebug.cricut.windows_helper_proxy.platform.system",
+                return_value="Windows",
+            ), patch.dict(
+                os.environ,
+                {"SLICEBUG_DISABLE_WINDOWS_HELPER_PROXY": "1"},
+            ):
+                prepared = prepare_windows_device_plugin_proxy(
+                    str(source),
+                    str(Path(temp_dir) / "plugins"),
+                )
 
             self.assertIsNone(prepared)
 
@@ -92,25 +81,18 @@ class WindowsHelperProxyTest(unittest.TestCase):
             plugin_root = temp_path / "plugins"
             source_dir = plugin_root / "device-common"
             source = source_dir / "CricutDevice.exe"
-            python_exe = make_python_runtime(temp_path)
             write_file(source, b"helper")
             (source_dir / "support.dll").write_text("dll", encoding="utf-8")
             (source_dir / "logs").mkdir()
-            (source_dir / "logs" / "bridge.log").write_text(
-                "old log",
-                encoding="utf-8",
-            )
+            (source_dir / "logs" / "bridge.log").write_text("old log", encoding="utf-8")
+            stub = make_stub(temp_path)
 
             with patch(
                 "slicebug.cricut.windows_helper_proxy.platform.system",
                 return_value="Windows",
-            ), patch(
-                "slicebug.cricut.windows_helper_proxy.sys.executable",
-                str(python_exe),
-            ), patch(
-                "slicebug.cricut.windows_helper_proxy.sys._base_executable",
-                str(python_exe),
-                create=True,
+            ), patch.dict(
+                os.environ,
+                {windows_helper_proxy._STUB_ENV_OVERRIDE: str(stub)},
             ):
                 prepared = prepare_windows_device_plugin_proxy(
                     str(source),
@@ -119,19 +101,10 @@ class WindowsHelperProxyTest(unittest.TestCase):
 
             prepared_path = Path(prepared)
             self.assertEqual(prepared_path.name, "electron.exe")
-            self.assertEqual(prepared_path.read_bytes(), b"python")
-            self.assertEqual(
-                (prepared_path.parent / "python314.dll").read_bytes(),
-                b"python-dll",
-            )
-            self.assertEqual(
-                (prepared_path.parent / "vcruntime140.dll").read_bytes(),
-                b"vc-runtime",
-            )
-            pth = (prepared_path.parent / "electron._pth").read_text(encoding="utf-8")
-            self.assertIn(str(python_exe.parent), pth)
-            self.assertIn(str(python_exe.parent / "Lib"), pth)
+            self.assertEqual(prepared_path.read_bytes(), b"stub-exe")
+
             app_root = prepared_path.parent
+            self.assertEqual(app_root.name, windows_helper_proxy._APP_ROOT_NAME)
             helper_dir = (
                 app_root
                 / "node_modules"
@@ -142,12 +115,14 @@ class WindowsHelperProxyTest(unittest.TestCase):
             self.assertEqual((helper_dir / "support.dll").read_text(), "dll")
             self.assertTrue((helper_dir / "logs").exists())
             self.assertFalse((helper_dir / "logs" / "bridge.log").exists())
-            self.assertEqual(
-                (app_root / "bridge").read_text(encoding="utf-8"),
-                windows_helper_proxy._BRIDGE_SCRIPT,
-            )
+
+            # The stub-based proxy carries no Python runtime, _pth, or bridge script.
+            self.assertFalse((app_root / "electron._pth").exists())
+            self.assertFalse((app_root / "bridge").exists())
             self.assertTrue(
-                (prepared_path.parents[1] / windows_helper_proxy.PROXY_METADATA_NAME).exists()
+                (
+                    prepared_path.parents[1] / windows_helper_proxy.PROXY_METADATA_NAME
+                ).exists()
             )
 
     def test_windows_reuses_valid_proxy_cache(self):
@@ -155,19 +130,15 @@ class WindowsHelperProxyTest(unittest.TestCase):
             temp_path = Path(temp_dir)
             plugin_root = temp_path / "plugins"
             source = plugin_root / "device-common" / "CricutDevice.exe"
-            python_exe = make_python_runtime(temp_path)
             write_file(source, b"helper")
+            stub = make_stub(temp_path)
 
             with patch(
                 "slicebug.cricut.windows_helper_proxy.platform.system",
                 return_value="Windows",
-            ), patch(
-                "slicebug.cricut.windows_helper_proxy.sys.executable",
-                str(python_exe),
-            ), patch(
-                "slicebug.cricut.windows_helper_proxy.sys._base_executable",
-                str(python_exe),
-                create=True,
+            ), patch.dict(
+                os.environ,
+                {windows_helper_proxy._STUB_ENV_OVERRIDE: str(stub)},
             ):
                 first = prepare_windows_device_plugin_proxy(
                     str(source),

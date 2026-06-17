@@ -2,109 +2,36 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shutil
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from slicebug.debug import log_debug
 from slicebug.exceptions import UserError
 
 
-PROXY_VERSION = "v0.1"
+PROXY_VERSION = "v0.2"
 PROXY_PLUGIN_NAME = f"device-common-proxy-{PROXY_VERSION}"
 PROXY_METADATA_NAME = "slicebug-helper-proxy.json"
 
 _APP_ROOT_NAME = "Cricut" + "DesignSpace"
 _SCOPE_NAME = "@" + "cricut"
-_BRIDGE_SCRIPT_NAME = "bridge"
 _DISABLE_VALUES = {"1", "true", "TRUE", "yes", "YES", "on", "ON"}
-
-_BRIDGE_SCRIPT = """\
-import subprocess
-import sys
-import threading
-from pathlib import Path
-
-
-BUFFER_SIZE = 65536
-SCOPE_NAME = "@" + "cricut"
-
-
-def main():
-    app_root = Path(sys.executable).resolve().parent
-    helper = app_root / "node_modules" / SCOPE_NAME / "device-common" / "CricutDevice.exe"
-    process = subprocess.Popen(
-        [str(helper), "bridge"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=0,
-        cwd=str(helper.parent),
-    )
-
-    stdin_thread = threading.Thread(
-        target=pump,
-        args=(sys.stdin.buffer, process.stdin, True),
-        daemon=True,
-    )
-    stderr_thread = threading.Thread(
-        target=pump,
-        args=(process.stderr, sys.stderr.buffer, False),
-        daemon=True,
-    )
-    stdin_thread.start()
-    stderr_thread.start()
-
-    pump(process.stdout, sys.stdout.buffer, False)
-    return process.wait()
-
-
-def pump(source, target, close_target):
-    try:
-        while True:
-            chunk = read_chunk(source)
-            if not chunk:
-                break
-            target.write(chunk)
-            target.flush()
-    except (BrokenPipeError, OSError):
-        pass
-    finally:
-        if close_target:
-            try:
-                target.close()
-            except OSError:
-                pass
-
-
-def read_chunk(source):
-    read1 = getattr(source, "read1", None)
-    if read1 is not None:
-        return read1(BUFFER_SIZE)
-    return source.read(BUFFER_SIZE)
-
-
-raise SystemExit(main())
-"""
-
-
-@dataclass(frozen=True)
-class _PythonRuntime:
-    executable: Path
-    support_files: tuple[Path, ...]
-    path_entries: tuple[Path, ...]
+_STUB_ENV_OVERRIDE = "SLICEBUG_WINDOWS_HELPER_PROXY_STUB"
+_BUNDLED_STUB_RELATIVE = ("helper-proxy", "electron.exe")
 
 
 def prepare_windows_device_plugin_proxy(source_path, plugin_root):
     """Return an electron.exe proxy path for the Windows helper gate, if possible.
 
-    Current Windows helpers trust a development-style parent layout where the
-    helper runs from node_modules and its real parent is named electron.exe. This
-    function builds that layout in SliceBug's user cache. In a normal Python
-    install it copies the local Python interpreter to the required parent name
-    and runs the tiny proxy script through it.
+    Current Windows helpers only run their bridge protocol when their parent
+    process is named electron.exe and the helper sits under a
+    node_modules/<scope>/device-common layout. This builds that layout in
+    SliceBug's user cache using a tiny prebuilt native proxy (electron.exe, bundled
+    with SliceBug on Windows) that relays stdin/stdout/stderr to the real helper.
+    We never modify Cricut's installed or bootstrapped helper; we copy it into the
+    cache beside the proxy. When the bundled stub is unavailable we return None and
+    the caller falls back to the compatibility (patch) path.
     """
     if platform.system() != "Windows":
         return None
@@ -112,13 +39,12 @@ def prepare_windows_device_plugin_proxy(source_path, plugin_root):
         log_debug("device_plugin.proxy.disabled", source_path=source_path)
         return None
 
-    python_runtime = _python_runtime()
-    if python_runtime is None:
+    stub = _bundled_proxy_stub()
+    if stub is None:
         log_debug(
             "device_plugin.proxy.unavailable",
             source_path=source_path,
             executable=sys.executable,
-            base_executable=getattr(sys, "_base_executable", None),
         )
         return None
 
@@ -135,12 +61,12 @@ def prepare_windows_device_plugin_proxy(source_path, plugin_root):
     app_root = cache_dir / _APP_ROOT_NAME
     proxy_exe = app_root / "electron.exe"
     helper_exe = _helper_dir(app_root) / source.name
-    bridge_script = app_root / _BRIDGE_SCRIPT_NAME
 
     source_md5 = _file_md5(source)
-    metadata = _metadata(source, source_md5, python_runtime)
+    stub_md5 = _file_md5(stub)
+    metadata = _metadata(source, source_md5, stub, stub_md5)
 
-    if _cached_proxy_is_valid(proxy_exe, helper_exe, bridge_script, cache_dir, metadata):
+    if _cached_proxy_is_valid(proxy_exe, helper_exe, cache_dir, metadata):
         log_debug(
             "device_plugin.proxy.cache_hit",
             source_path=str(source),
@@ -153,77 +79,41 @@ def prepare_windows_device_plugin_proxy(source_path, plugin_root):
         "device_plugin.proxy.cache_rebuild",
         source_path=str(source),
         cache_dir=str(cache_dir),
-        proxy_source=str(python_runtime.executable),
+        proxy_stub=str(stub),
         source_md5=source_md5,
     )
-    _rebuild_proxy_cache(source, python_runtime, cache_dir, metadata)
+    _rebuild_proxy_cache(source, stub, cache_dir, metadata)
     return str(proxy_exe)
 
 
-def _python_runtime():
-    for value in (getattr(sys, "_base_executable", None), sys.executable):
-        if not value:
-            continue
-        candidate = Path(value)
-        if candidate.exists() and _is_console_python_executable(candidate):
-            runtime = _describe_python_runtime(candidate.resolve())
-            if runtime is not None:
-                return runtime
+def _bundled_proxy_stub():
+    """Locate the prebuilt electron.exe proxy stub bundled with SliceBug.
+
+    An explicit override wins (useful for tests and manual runs); otherwise the
+    stub ships next to the frozen executable at helper-proxy/electron.exe.
+    """
+    candidates = []
+    override = os.environ.get(_STUB_ENV_OVERRIDE)
+    if override:
+        candidates.append(Path(override))
+    if sys.executable:
+        candidates.append(
+            Path(sys.executable).resolve().parent.joinpath(*_BUNDLED_STUB_RELATIVE)
+        )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
     return None
 
 
-def _is_console_python_executable(path):
-    name = path.name.lower()
-    return re.fullmatch(r"python(?:\d+(?:\.\d+)?)?\.exe", name) is not None
-
-
-def _describe_python_runtime(executable):
-    install_root = executable.parent
-    lib_dir = install_root / "Lib"
-    if not (lib_dir / "encodings").is_dir():
-        return None
-
-    support_files = [executable]
-    for pattern in ("python*.dll", "vcruntime*.dll", "ucrtbase.dll"):
-        support_files.extend(sorted(install_root.glob(pattern)))
-
-    path_entries = [
-        path
-        for path in (
-            install_root,
-            install_root / "DLLs",
-            *_python_zip_entries(install_root),
-            lib_dir,
-        )
-        if path.exists()
-    ]
-
-    return _PythonRuntime(
-        executable=executable,
-        support_files=tuple(dict.fromkeys(path.resolve() for path in support_files)),
-        path_entries=tuple(dict.fromkeys(path.resolve() for path in path_entries)),
-    )
-
-
-def _python_zip_entries(install_root):
-    return sorted(install_root.glob("python*.zip"))
-
-
-def _metadata(source, source_md5, python_runtime):
+def _metadata(source, source_md5, stub, stub_md5):
     return {
         "proxyVersion": PROXY_VERSION,
         "sourceName": source.name,
         "sourceMd5": source_md5,
-        "proxySourceName": python_runtime.executable.name,
-        "proxySourceMd5": _file_md5(python_runtime.executable),
-        "proxySupportFiles": [
-            {
-                "name": file.name,
-                "md5": _file_md5(file),
-            }
-            for file in python_runtime.support_files
-        ],
-        "proxyPathEntries": [str(path) for path in python_runtime.path_entries],
+        "stubName": stub.name,
+        "stubMd5": stub_md5,
         "runtimeAppRoot": _APP_ROOT_NAME,
         "helperRelativePath": str(
             Path("node_modules") / _SCOPE_NAME / "device-common" / source.name
@@ -231,14 +121,11 @@ def _metadata(source, source_md5, python_runtime):
     }
 
 
-def _cached_proxy_is_valid(proxy_exe, helper_exe, bridge_script, cache_dir, expected):
+def _cached_proxy_is_valid(proxy_exe, helper_exe, cache_dir, expected):
     metadata_path = cache_dir / PROXY_METADATA_NAME
-    pth_path = proxy_exe.parent / "electron._pth"
     if (
         not proxy_exe.exists()
         or not helper_exe.exists()
-        or not bridge_script.exists()
-        or not pth_path.exists()
         or not metadata_path.exists()
     ):
         return False
@@ -248,24 +135,12 @@ def _cached_proxy_is_valid(proxy_exe, helper_exe, bridge_script, cache_dir, expe
         return False
     return (
         metadata == expected
-        and _file_md5(proxy_exe) == expected["proxySourceMd5"]
+        and _file_md5(proxy_exe) == expected["stubMd5"]
         and _file_md5(helper_exe) == expected["sourceMd5"]
-        and bridge_script.read_text(encoding="utf-8") == _BRIDGE_SCRIPT
-        and _proxy_runtime_files_are_valid(proxy_exe.parent, expected)
-        and pth_path.read_text(encoding="utf-8")
-        == _pth_contents(expected["proxyPathEntries"])
     )
 
 
-def _proxy_runtime_files_are_valid(app_root, expected):
-    for file in expected["proxySupportFiles"]:
-        path = app_root / _runtime_file_name(file["name"])
-        if not path.exists() or _file_md5(path) != file["md5"]:
-            return False
-    return True
-
-
-def _rebuild_proxy_cache(source, python_runtime, cache_dir, metadata):
+def _rebuild_proxy_cache(source, stub, cache_dir, metadata):
     tmp_dir = cache_dir.with_name(cache_dir.name + ".tmp")
     try:
         if tmp_dir.exists():
@@ -287,16 +162,7 @@ def _rebuild_proxy_cache(source, python_runtime, cache_dir, metadata):
                 shutil.copy2(item, target)
 
         (helper_dir / "logs").mkdir(exist_ok=True)
-        for support_file in python_runtime.support_files:
-            shutil.copy2(support_file, app_root / _runtime_file_name(support_file.name))
-        (app_root / "electron._pth").write_text(
-            _pth_contents(str(path) for path in python_runtime.path_entries),
-            encoding="utf-8",
-        )
-        (app_root / _BRIDGE_SCRIPT_NAME).write_text(
-            _BRIDGE_SCRIPT,
-            encoding="utf-8",
-        )
+        shutil.copy2(stub, app_root / "electron.exe")
         (tmp_dir / PROXY_METADATA_NAME).write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -322,16 +188,6 @@ def _rebuild_proxy_cache(source, python_runtime, cache_dir, metadata):
 
 def _helper_dir(app_root):
     return app_root / "node_modules" / _SCOPE_NAME / "device-common"
-
-
-def _runtime_file_name(name):
-    if name.lower() == "python.exe":
-        return "electron.exe"
-    return name
-
-
-def _pth_contents(path_entries):
-    return "".join(f"{path}\n" for path in path_entries) + "import site\n"
 
 
 def _file_md5(path):

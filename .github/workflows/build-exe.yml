@@ -73,6 +73,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build Windows helper proxy stub
+        shell: cmd
+        run: cl /nologo /O1 /MT windows-helper-proxy\electron_stub.c /Fewindows-helper-proxy\electron.exe /Fowindows-helper-proxy\electron_stub.obj
+
       - name: Build Windows release
         run: python setup.py build_exe -b slicebug-release
 
